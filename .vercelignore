@@ -1,0 +1,12 @@
+.vs/
+obj/
+bin/
+node_modules/
+tests/
+*.njsproj
+*.sln
+*.user
+*.zip
+.env
+web.config
+scripts/

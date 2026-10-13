@@ -1,4 +1,4 @@
-﻿# Kohteen kehitysanalyysi · 2026.10.13.1
+# Kohteen kehitysanalyysi · 2026.10.13.1
 
 Klikkaa karttakohdetta tai listan tietopainiketta. Sovellus hakee valitulle kohteelle 28 vrk:n VIIRS- ja MODIS NRT -aineiston. Vaihda tarvittaessa 14 vrk:een tai säädä paikallinen säde 1–20 km. Paina Hae kohde uudelleen. Tuloksena on FRP-aikasarja, nousun ajoitus, ylilentojen muutokset, pistekohtainen sijaintikuva, aineiston aukot ja CSV-vienti. MODIS näkyy erillisenä tukiaineistona. Tarkat kynnysarvot ovat sovelluksen Päättelyn perusteet -ikkunassa.
 
@@ -131,3 +131,7 @@ Ajastimen selainkohtainen kutsukonteksti on korjattu. Kartan siirto ja zoomaus h
 Päivitä projektin tiedostot, käynnistä Node-palvelin uudelleen ja lataa sivu normaalisti uudelleen. Verkkopalveluun korjaus on myös julkaistava. Versio näkyy käyttöliittymässä muodossa 2026.09.15.1. Jos 403 jatkuu, tarkista selaimen Network-näkymästä, lähettääkö karttakuvan pyyntö todellisen sivusto-osoitteen Referer-tiedon. Laajennus tai välityspalvelin voi poistaa sen. Mahdollinen jo voimassa oleva palveluntarjoajan esto ei välttämättä poistu heti koodikorjauksella. Älä lisää pyyntöihin satunnaisia parametreja tai muuta osoitteita eston kiertämiseksi.
 
 Ohje perustuu [OpenStreetMapin tiilipalvelun käyttöehtoihin](https://operations.osmfoundation.org/policies/tiles/).
+
+## Vercel
+
+Tuotanto: https://thermal-anomalies.vercel.app. `public/` julkaistaan staattisena ja `api/*.js` ajetaan Vercel-funktioina, jotka käyttävät `server.mjs`:n käsittelijää. Julkaisu: `npx vercel deploy --prod`. Valinnainen `NASA_FIRMS_MAP_KEY` asetetaan Vercelin projektin ympäristömuuttujiin.

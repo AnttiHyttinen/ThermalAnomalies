@@ -35,7 +35,7 @@ const contentTypes = {
   ".svg": "image/svg+xml",
 };
 
-export const server = createServer(async (request, response) => {
+export async function handler(request, response) {
   setSecurityHeaders(response);
   const url = new URL(request.url || "/", "http://localhost");
 
@@ -65,7 +65,9 @@ export const server = createServer(async (request, response) => {
       : error.message;
     sendJson(response, status, { error: { code, message } });
   }
-});
+}
+
+export const server = createServer(handler);
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   server.listen(port, () => console.log(`Lämpöpoikkeamat: http://localhost:${port}`));
