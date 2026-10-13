@@ -1,3 +1,18 @@
+# Merkittävyys ja alueanalyysi · 2026.10.13.2
+
+Sovellus erottaa merkittävät lämpötapahtumat tavallisesta lämmöstä ilman taustatietokantaa.
+
+- **Merkittävyys 0–100:** teho, arvioitu energia (GJ), laajuus, kesto, yöhavainnot, pysyvän lähteen poikkeama, kehitys sekä rakennettu/teollinen ympäristö. Pelto- ja ruohikkopoltot sekä pienet kasvillisuuspalot saavat alennuskertoimen, ja normaalitasollaan olevat soihdut ja prosessilämpö saavat 0.
+- **Oletussuodatin ”Merkittävät”** ja säädettävä vähimmäismerkittävyys (oletus 30). Suodatinrivi kertoo, montako kohdetta piilotettiin ja miksi. Lajittelun oletus on merkittävyys.
+- **Tapahtumatyyppi ja kokoluokka** (esim. laaja maastopalo, öljy-/polttoainekohteen palo, lyhyt voimakas piikki, pelto- tai ruohikkopoltto) näkyvät listassa, popupissa ja kohteen tietoikkunassa perusteluineen.
+- **Analysoi alue:** näkymän kohteille haetaan maanpeite, OpenStreetMap-laitoskonteksti (Overpass, 1,5 km) ja tarkka 14 vrk:n aineisto. Tuloksena on raportti, vertailu saman alueen edelliseen raporttiin (Uusi/Jatkuu/Päättynyt) sekä CSV-, GeoJSON- ja KML-vienti. Raportit tallennetaan vain selaimeen (10 viimeisintä).
+- **Palvelin:** `/api/site-context` (valinnainen `OVERPASS_URL`), FIRMS-jaksojen rinnakkaishaku ja yhteisen avaimen hakujen CDN-välimuisti 10 min.
+- **Testit:** `tests/significance.test.mjs` sisältää kalibrointiesimerkit (jalostamo, maastopalo, peltopoltto, ruohikko, soihtu, lähteen poikkeama, piikki).
+
+Pisteytys on heuristinen eikä sitä ole kalibroitu vahvistetuilla palotapauksilla. Tarkat rajat ovat Päättelyn perusteet -ikkunan kohdissa 9–10.
+
+---
+
 # Kohteen kehitysanalyysi · 2026.10.13.1
 
 Klikkaa karttakohdetta tai listan tietopainiketta. Sovellus hakee valitulle kohteelle 28 vrk:n VIIRS- ja MODIS NRT -aineiston. Vaihda tarvittaessa 14, 7 tai 6 vrk:een tai säädä paikallinen säde 1–20 km. Paina Hae kohde uudelleen. Kohteen GPS-koordinaatit (WGS84) näkyvät tiedoissa, ja Kopioi-painike vie ne leikepöydälle. Tuloksena on FRP-aikasarja, nousun ajoitus, ylilentojen muutokset, pistekohtainen sijaintikuva, aineiston aukot ja CSV-vienti. MODIS näkyy erillisenä tukiaineistona. Tarkat kynnysarvot ovat sovelluksen Päättelyn perusteet -ikkunassa.

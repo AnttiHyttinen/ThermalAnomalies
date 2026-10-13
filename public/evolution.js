@@ -1,4 +1,4 @@
-import { haversineKm, summarizeOverpasses } from "./anomaly.js?v=20261013.1";
+import { haversineKm, summarizeOverpasses } from "./anomaly.js?v=20261013.2";
 
 const stamp = (p) => `${p.date}T${p.time}:00Z`;
 const dated = (p) => /^\d{2}:\d{2}$/.test(p.time || "") && Number.isFinite(Date.parse(stamp(p)));

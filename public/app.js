@@ -1,12 +1,14 @@
-﻿import { buildDetailAnalysis, detailBounds, exportEvolutionCsv } from "./evolution.js?v=20261013.1";
-import { renderEvolution, renderSpatial } from "./detail-view.js?v=20261013.1";
-import { createTileRenderer } from "./tiles.js?v=20261013.1";
-import { migrateMapKey, readMapKey, saveMapKey, removeMapKey, canSendMapKey, MAP_KEY_STORAGE, MAP_FETCH_DELAY_MS, createDebouncedAction } from "./preferences.js?v=20261013.1";
-import { dailyCounts, findLargeFireEvents } from "./anomaly.js?v=20261013.1";
-import { formatDate, shortWeekday, periodFrpPeak } from "./format.js?v=20261013.1";
+﻿import { buildDetailAnalysis, detailBounds, exportEvolutionCsv } from "./evolution.js?v=20261013.2";
+import { renderEvolution, renderSpatial } from "./detail-view.js?v=20261013.2";
+import { createTileRenderer } from "./tiles.js?v=20261013.2";
+import { migrateMapKey, readMapKey, saveMapKey, removeMapKey, canSendMapKey, MAP_KEY_STORAGE, MAP_FETCH_DELAY_MS, createDebouncedAction } from "./preferences.js?v=20261013.2";
+import { dailyCounts, findLargeFireEvents } from "./anomaly.js?v=20261013.2";
+import { formatDate, shortWeekday, periodFrpPeak } from "./format.js?v=20261013.2";
 
-import { environmentalContext, observationEvidence, priorityFor, visibleEvents, shiftDay, selectionDate, exportEventsCsv, LANDCOVER_CLASSES } from "./assessment.js?v=20261013.1";
-import { REASONING_HTML } from "./reasoning.js?v=20261013.1";
+import { environmentalContext, observationEvidence, priorityFor, visibleEvents, hiddenBySignificance, shiftDay, selectionDate, exportEventsCsv, LANDCOVER_CLASSES } from "./assessment.js?v=20261013.2";
+import { REASONING_HTML } from "./reasoning.js?v=20261013.2";
+import { assessSignificance, summarizeDetail, SITE_CATEGORIES, TREND_LABELS, DEFAULT_MIN_SIGNIFICANCE } from "./significance.js?v=20261013.2";
+import { rankAreaCandidates, buildAreaReport, loadReports, saveReport, findPreviousReport, reportToCsv, reportToGeoJson, reportToKml } from "./area-analysis.js?v=20261013.2";
 document.querySelector("#reasoning-content").innerHTML = REASONING_HTML;
 
 const TILE_SIZE = 256;
@@ -30,6 +32,12 @@ const elements = {
   includeHistory: document.querySelector("#include-history"),
   showPoints: document.querySelector("#show-points"),
   minFrp: document.querySelector("#min-frp"),
+  minSignificance: document.querySelector("#min-significance"),
+  areaButton: document.querySelector("#area-analysis-button"),
+  areaDialog: document.querySelector("#area-dialog"),
+  areaClose: document.querySelector("#area-dialog-close"),
+  areaStatus: document.querySelector("#area-status"),
+  areaContent: document.querySelector("#area-content"),
   filterNote: document.querySelector("#filter-note"),
   coverageNote: document.querySelector("#coverage-note"),
   landcoverStatus: document.querySelector("#landcover-status"),
@@ -100,8 +108,11 @@ const state = {
   detailController: null,
   tooltipEventId: null,
   counts: [],
-  filter: "attention",
-  sort: "priority",
+  filter: "significant",
+  sort: "significance",
+  minSignificance: DEFAULT_MIN_SIGNIFICANCE,
+  areaController: null,
+  siteController: null,
   repeatedOnly: false,
   includeHistory: false,
   showPoints: false,
@@ -149,7 +160,7 @@ elements.selectedDate.addEventListener("change", () => selectDay(elements.select
 elements.previousDay.addEventListener("click", () => selectDay(shiftDay(selectionDate(state.selection), -1)));
 elements.nextDay.addEventListener("click", () => selectDay(shiftDay(selectionDate(state.selection), 1)));
 elements.todayButton.addEventListener("click", () => selectDay(new Date().toISOString().slice(0, 10), true));
-for (const element of [elements.eventFilter, elements.eventSort, elements.repeatedOnly, elements.includeHistory, elements.showPoints, elements.minFrp]) element.addEventListener("change", () => {
+for (const element of [elements.eventFilter, elements.eventSort, elements.repeatedOnly, elements.includeHistory, elements.showPoints, elements.minFrp, elements.minSignificance]) element.addEventListener("change", () => {
   state.filter = elements.eventFilter.value;
   state.sort = elements.eventSort.value;
   state.repeatedOnly = elements.repeatedOnly.checked;
@@ -157,11 +168,16 @@ for (const element of [elements.eventFilter, elements.eventSort, elements.repeat
   state.showPoints = elements.showPoints.checked;
   state.minFrp = Math.max(0, Number(elements.minFrp.value) || 0);
   elements.minFrp.value = state.minFrp;
+  state.minSignificance = Math.max(0, Math.min(100, Number(elements.minSignificance.value) || 0));
+  elements.minSignificance.value = state.minSignificance;
   elements.tooltip.hidden = true;
   if (state.data) renderSummary();
   drawHeatLayer();
 });
 elements.moreLandcover.addEventListener("click", () => enrichContexts(state.requestVersion));
+elements.areaButton.addEventListener("click", () => void runAreaAnalysis());
+elements.areaClose.addEventListener("click", () => elements.areaDialog.close());
+elements.areaDialog.addEventListener("close", () => state.areaController?.abort());
 elements.eventDialogClose.addEventListener("click", () => elements.eventDialog.close());
 elements.eventDialog.addEventListener("close", () => { state.currentEventId = null; state.detailController?.abort(); state.detail = null; });
 elements.exportCsv.addEventListener("click", () => {
@@ -390,7 +406,7 @@ function selectDay(date, live = false) {
 async function fetchData({ announce = false, force = false } = {}) {
   if (!state.width || !state.height) return;
   mapFetch.cancel();
-  state.abortController?.abort(); state.contextController?.abort(); state.detailController?.abort();
+  state.abortController?.abort(); state.contextController?.abort(); state.detailController?.abort(); state.areaController?.abort(); state.siteController?.abort();
   const version = ++state.requestVersion;
   const abortController = new AbortController();
   state.abortController = abortController;
@@ -521,7 +537,7 @@ function renderSummary() {
   const warning = data.coverageComplete === false;
   elements.coverageNote.dataset.warning = String(warning);
   elements.coverageNote.textContent = `${currentDay ? "Kuluva UTC-päivä on kesken. " : "Historiallinen UTC-päivä. "}Vertailu ${formatDate(data.analysisRange.start)}–${formatDate(shiftDay(selectedDate,-1))}. ${warning ? "Osa aineistosta puuttuu; normaalitasoa ei vahvisteta." : "Datapyynnöt onnistuivat. Pilvien ja ylitysten kattavuutta ei tunneta."}${data.warnings?.length ? "\n" + data.warnings.join("\n") : ""}`;
-  elements.lastUpdated.textContent = `Haettu ${formatDate(data.generatedAt.slice(0,10))} ${timeFormatter.format(new Date(data.generatedAt))} UTC · versio 2026.10.13.1`;
+  elements.lastUpdated.textContent = `Haettu ${formatDate(data.generatedAt.slice(0,10))} ${timeFormatter.format(new Date(data.generatedAt))} UTC · versio 2026.10.13.2`;
   const maximum = Math.max(...counts.map((e) => e.count), 1);
   elements.dailyBars.replaceChildren(...counts.map((entry) => {
     const button = document.createElement("button"); button.type = "button"; button.className = "day-bar"; button.dataset.selected = String(entry.date === selectedDate);
@@ -533,7 +549,8 @@ function renderSummary() {
     button.addEventListener("click",()=>selectDay(entry.date)); return button;
   }));
   const total = visibleEvents(analysis.events, {filter:"all",includeHistory:state.includeHistory}).length;
-  elements.filterNote.textContent = `Näkyvissä ${events.length}/${total}. ${state.filter === "attention" ? "Normaalit pysyvät lähteet ja usealla ylilennolla havaitut kasvillisuustapahtumat on piilotettu. Yksittäiset ja epäselvät havainnot säilyvät mukana." : "Maanpeite kuvaa ympäristöä, ei palavaa materiaalia."}${state.minFrp ? ` Tehoraja ${state.minFrp} MW poistaa myös kohteet, joilta FRP puuttuu.` : ""}`;
+  const hidden = state.filter === "significant" ? hiddenBySignificance(analysis.events, state) : null;
+  elements.filterNote.textContent = `Näkyvissä ${events.length}/${total}. ${hidden ? `Merkittävyys vähintään ${state.minSignificance}. Piilotettu: ${hidden["normal-source"]} normaalia pysyvää lähdettä, ${hidden.agricultural} pelto- tai ruohikkopolttoa, ${hidden["small-vegetation"]} pientä kasvillisuuspaloa, ${hidden.minor} muuta vähäistä. Analysoi alue tarkentaa ympäristöä ja kohdetietoja.` : state.filter === "attention" ? "Normaalit pysyvät lähteet ja usealla ylilennolla havaitut kasvillisuustapahtumat on piilotettu. Yksittäiset ja epäselvät havainnot säilyvät mukana." : "Maanpeite kuvaa ympäristöä, ei palavaa materiaalia."}${state.minFrp ? ` Tehoraja ${state.minFrp} MW poistaa myös kohteet, joilta FRP puuttuu.` : ""}`;
   elements.exportCsv.disabled = events.length === 0;
   const shown = events.slice(0, 150);
   elements.fireList.replaceChildren(...shown.map((event, index) => {
@@ -541,14 +558,140 @@ function renderSummary() {
     card.style.setProperty("--event-color",`rgb(${eventRingStyle(event).color})`);
     const priority = priorityFor(event), env = environmentalContext(event), evidence = observationEvidence(event);
     const frp = state.includeHistory && !event.activeToday ? event.displayPeakPassFrp : event.currentPeakPassFrp;
-    card.innerHTML = `<h3>${index + 1}. ${escapeHtml(priority.label)}</h3><p>${event.latitude.toFixed(4)}, ${event.longitude.toFixed(4)}</p><p>${escapeHtml(env.label)}</p><p class="event-stats"><strong>${formatScore(frp)}</strong> MW · ${event.currentPassCount} ylilentoa D0</p><p class="meta">${event.activeToday ? "Lämpöhavainto " + formatDate(selectedDate) : "Ei lämpöhavaintoa " + formatDate(selectedDate)} · ${evidence.repeated ? "useita ylilentoja" : "rajallinen havaintotuki"}</p><p class="meta">${evidence.latest ? "Viimeisin " + formatDate(evidence.date) + " " + evidence.latest.slice(11) + " UTC" : "Havaintoaika puuttuu"}${Number.isFinite(evidence.ratio) ? " · FRP enintään " + formatScore(evidence.ratio) + "× vertailumediaani" : ""}</p><div class="event-actions"><button type="button" data-action="details">Tiedot ja FRP</button><button type="button" data-action="map">Kartalle</button></div>`;
+    const significance = assessSignificance(event);
+    card.innerHTML = `<h3>${index + 1}. ${escapeHtml(priority.label)}</h3><p class="significance-line"><span class="sig-badge" data-level="${significance.level.id}" title="Merkittävyys 0–100: ${escapeHtml(significance.level.label)}">${significance.score}</span> ${escapeHtml(significance.type.label)} · ${escapeHtml(significance.size.label)}</p><p>${event.latitude.toFixed(4)}, ${event.longitude.toFixed(4)}</p><p>${escapeHtml(env.label)}</p><p class="event-stats"><strong>${formatScore(frp)}</strong> MW · ${event.currentPassCount} ylilentoa D0</p><p class="meta">${event.activeToday ? "Lämpöhavainto " + formatDate(selectedDate) : "Ei lämpöhavaintoa " + formatDate(selectedDate)} · ${evidence.repeated ? "useita ylilentoja" : "rajallinen havaintotuki"}</p><p class="meta">${evidence.latest ? "Viimeisin " + formatDate(evidence.date) + " " + evidence.latest.slice(11) + " UTC" : "Havaintoaika puuttuu"}${Number.isFinite(evidence.ratio) ? " · FRP enintään " + formatScore(evidence.ratio) + "× vertailumediaani" : ""}</p><div class="event-actions"><button type="button" data-action="details">Tiedot ja FRP</button><button type="button" data-action="map">Kartalle</button></div>`;
     card.querySelector('[data-action="details"]').addEventListener("click",()=>openEvent(event));
     card.querySelector('[data-action="map"]').addEventListener("click",()=>focusEvent(event));
     return card;
   }));
-  if (!events.length) elements.fireList.innerHTML = '<p class="list-placeholder">Ei kohteita valitulla suodattimella. Kokeile “Kaikki lämpötapahtumat” tai näytä edelliset kuusi päivää. Tämä ei tarkoita, ettei alueella pala.</p>';
+  if (!events.length) elements.fireList.innerHTML = '<p class="list-placeholder">Ei kohteita valitulla suodattimella. Kokeile pienempää merkittävyysrajaa, “Kaikki lämpötapahtumat” tai näytä edelliset kuusi päivää. Tämä ei tarkoita, ettei alueella pala.</p>';
   if (events.length > shown.length) { const note = document.createElement("p"); note.className="meta"; note.textContent=`Listalla ensimmäiset ${shown.length}; kaikki ${events.length} näkyvät kartalla ja CSV-viennissä. Rajaa karttaa tai suodatinta.`; elements.fireList.append(note); }
   elements.empty.hidden = events.length > 0;
+}
+
+function renderSignificanceBox(event) {
+  const box = elements.eventDialogContent.querySelector("#significance-box");
+  if (!box || state.currentEventId !== event.id) return;
+  const s = assessSignificance(event), f = s.features;
+  const site = event.siteContext;
+  const siteText = !site ? "Haetaan OpenStreetMap-kohdetietoja 1,5 km:n säteeltä…"
+    : site.status === "error" ? "OpenStreetMap-kohdetietoja ei saatu. Tyyppiarvio perustuu lämpöhavaintoihin ja maanpeitteeseen."
+    : Object.keys(site.categories || {}).length ? `OpenStreetMap 1,5 km: ${Object.entries(site.categories).map(([key, n]) => `${SITE_CATEGORIES[key] || key} ${n} kpl (lähin ${formatScore(site.nearestKm?.[key])} km)`).join(", ")}${site.names?.length ? `. Nimiä: ${site.names.join(", ")}` : ""}.`
+    : "OpenStreetMapista ei löytynyt teollisuus-, varasto-, energia-, sotilas- tai liikennekohteita 1,5 km:n säteeltä.";
+  const detail = f.detail ? `<p>Kohdeanalyysi: ${f.detail.onsetAt ? `nousu ${escapeHtml(f.detail.onsetAt.replace("T", " ").slice(0, 16))} UTC${f.detail.onsetConfirmed ? " (vahvistettu)" : ""}` : "selvää nousua ei tunnistettu"} · voimistumisia ${f.detail.intensifications} · laajenemisia ${f.detail.expansions} · lämpöpiikkejä ${f.detail.pulses}.</p>` : "";
+  box.innerHTML = `<h3>Merkittävyys ${s.score}/100 · ${escapeHtml(s.level.label)}</h3><p><strong>${escapeHtml(s.type.label)}</strong> · ${escapeHtml(s.size.label)}</p><p>${escapeHtml(s.type.reason)}</p><p>7 vrk: huippu ${formatScore(f.peakMw)} MW${event.kind !== "fire" ? " (yli oman vertailutason)" : ""} · arvioitu energia noin ${formatScore(f.energyGj)} GJ · ${f.activeDays} havaintopäivää · ${f.passCount} ylilentoa · ${f.nightPasses} yöhavaintoa · kehitys: ${TREND_LABELS[f.trend]}.</p>${detail}<p>${escapeHtml(siteText)}</p><details><summary>Pisteiden erittely</summary><ul>${s.parts.map((part) => `<li>${escapeHtml(part.label)}: ${escapeHtml(String(part.points))}</li>`).join("")}</ul><p class="meta">Merkittävyys on sääntöpohjainen arvio, ei palon vahvistus. Energia on karkea suuruusluokka harvoista ylilennoista.</p></details>`;
+}
+
+async function requestSiteContext(events, signal) {
+  const pending = events.filter((event) => event.siteContext?.status !== "ready").slice(0, 15);
+  if (!pending.length) return;
+  try {
+    const response = await fetch("/api/site-context", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ points: pending.map((e) => ({ id: e.id, latitude: e.latitude, longitude: e.longitude })) }), signal: AbortSignal.any([signal, AbortSignal.timeout(45000)]) });
+    if (!response.ok) throw new Error("Kohdetietohaku epäonnistui.");
+    const data = await response.json();
+    for (const item of data.results || []) { const event = pending.find((e) => e.id === item.id); if (event && item.siteContext) event.siteContext = item.siteContext; }
+  } catch (error) {
+    if (signal.aborted) throw error;
+  }
+  for (const event of pending) if (!event.siteContext) event.siteContext = { status: "error" };
+}
+
+async function loadSiteContextFor(event) {
+  state.siteController?.abort();
+  const controller = new AbortController(); state.siteController = controller;
+  try { await requestSiteContext([event], controller.signal); } catch { return; }
+  if (controller.signal.aborted) return;
+  renderSignificanceBox(event);
+  if (state.data) renderSummary();
+}
+
+async function ensureLandcover(events, signal) {
+  const pending = events.filter((event) => event.contextPoints?.length && event.environment?.status !== "ready");
+  for (let i = 0; i < pending.length; i += 6) {
+    const batch = pending.slice(i, i + 6);
+    const body = { events: batch.map((event) => { const all = event.contextPoints; return { id: event.id, points: all.length <= 48 ? all : Array.from({ length: 48 }, (_, j) => all[Math.floor(j * all.length / 48)]), totalPoints: all.length }; }) };
+    try {
+      const response = await fetch("/api/landcover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.any([signal, AbortSignal.timeout(190000)]) });
+      if (!response.ok) throw new Error("Maanpeitehaku ei onnistunut.");
+      const data = await response.json();
+      for (const item of data.results) { const event = batch.find((e) => e.id === item.id); if (event) event.environment = item.environment; }
+    } catch (error) {
+      if (signal.aborted) throw error;
+    }
+  }
+}
+
+async function ensureDetail(event, signal) {
+  if (event.detailSummary || !state.data) return;
+  const radiusKm = Math.min(20, Math.max(2, Math.ceil((event.extentKm || 0) + 1)));
+  const params = new URLSearchParams({ ...detailBounds(event, radiusKm), date: state.data.range.end, days: 14 });
+  try {
+    const response = await fetch(`/api/event-data?${params}`, { headers: state.mapKey ? { "X-FIRMS-MAP-Key": state.mapKey } : {}, signal: AbortSignal.any([signal, AbortSignal.timeout(120000)]) });
+    if (!response.ok) return;
+    event.detailSummary = summarizeDetail(buildDetailAnalysis(await response.json(), event, radiusKm));
+  } catch (error) {
+    if (signal.aborted) throw error;
+  }
+}
+
+async function runAreaAnalysis() {
+  if (!state.data) return showToast("Hae ensin havainnot kartalle.");
+  mapFetch.cancel();
+  state.areaController?.abort();
+  const controller = new AbortController(); state.areaController = controller;
+  const version = state.requestVersion, data = state.data, events = state.analysis.events;
+  const stale = () => controller.signal.aborted || version !== state.requestVersion;
+  const progress = (text) => { elements.areaStatus.textContent = text; };
+  elements.areaContent.innerHTML = "";
+  if (!elements.areaDialog.open) elements.areaDialog.showModal();
+  try {
+    progress("1/4 Arvioidaan ehdokkaiden ympäristö (WorldCover)…");
+    await ensureLandcover(rankAreaCandidates(events, { minScore: 10, limit: 24 }), controller.signal);
+    if (stale()) return;
+    progress("2/4 Haetaan OpenStreetMap-kohdetiedot…");
+    await requestSiteContext(rankAreaCandidates(events, { minScore: 15, limit: 15 }), controller.signal);
+    if (stale()) return;
+    const top = rankAreaCandidates(events, { minScore: 25, limit: 8 });
+    for (let i = 0; i < top.length; i += 2) {
+      progress(`3/4 Kohdeanalyysi 14 vrk: ${Math.min(i + 2, top.length)}/${top.length}…`);
+      await Promise.all(top.slice(i, i + 2).map((event) => ensureDetail(event, controller.signal)));
+      if (stale()) return;
+    }
+    progress("4/4 Kootaan raportti…");
+    const generatedAt = new Date().toISOString();
+    const previous = findPreviousReport(loadReports(globalThis.localStorage), data.area, generatedAt);
+    const report = buildAreaReport({ events, area: data.area, date: data.range.end, generatedAt, minSignificance: state.minSignificance, previous, coverageComplete: data.coverageComplete !== false });
+    saveReport(globalThis.localStorage, report);
+    state.areaReport = report;
+    progress(`Valmis ${timeFormatter.format(new Date(generatedAt))} UTC · ${formatDate(report.date)}${report.date.slice(0, 4)}${report.coverageComplete ? "" : " · aineisto osittainen"}`);
+    renderAreaReport(report, events);
+    renderSummary(); drawHeatLayer();
+  } catch (error) {
+    if (!stale()) progress(`Analyysi keskeytyi: ${error.message}`);
+  }
+}
+
+function renderAreaReport(report, events) {
+  const h = report.hidden, c = report.comparison;
+  const types = Object.entries(report.byType).sort((a, b) => b[1] - a[1]).map(([label, n]) => `${escapeHtml(label)} ${n}`).join(" · ");
+  const rows = report.rows.map((r, i) => `<tr data-level="${r.score >= 60 ? "very-high" : "high"}"><td>${i + 1}</td><td><span class="sig-badge" data-level="${r.score >= 60 ? "very-high" : "high"}">${r.score}</span></td><td><strong>${escapeHtml(r.type)}</strong><br><small>${escapeHtml(r.environment)}</small></td><td>${escapeHtml(r.size)}<br><small>${formatScore(r.peakMw)} MW · ~${formatScore(r.energyGj)} GJ</small></td><td>${r.activeDays} pv · ${r.passCount} ylil.<br><small>yö ${r.nightPasses} · ${escapeHtml(r.trend)}</small></td><td>${formatDate(r.firstDate)}–${formatDate(r.lastDate)}${r.onset ? `<br><small>nousu ${escapeHtml(r.onset.slice(5, 16).replace("T", " "))}${r.onsetConfirmed ? " ✓" : ""}</small>` : ""}</td><td><small>${escapeHtml(r.site)}</small></td><td>${c ? escapeHtml(r.status) : "—"}</td><td><small>${r.latitude.toFixed(5)}, ${r.longitude.toFixed(5)}</small><br><button type="button" data-area-map="${escapeHtml(r.id)}">Kartalle</button> <button type="button" data-area-open="${escapeHtml(r.id)}">Tiedot</button></td></tr>`).join("");
+  const ended = c?.ended?.length ? `<details><summary>Edellisessä raportissa merkittävinä, nyt ei (${c.ended.length})</summary><ul>${c.ended.map((e) => `<li>${escapeHtml(e.type)} · ${e.score} · ${e.latitude.toFixed(4)}, ${e.longitude.toFixed(4)}</li>`).join("")}</ul></details>` : "";
+  elements.areaContent.innerHTML = `<div class="detail-grid"><section class="detail-box"><h3>${report.rows.length} merkittävää tapahtumaa</h3><p>Raja: merkittävyys vähintään ${report.minSignificance}/100. Kohteita yhteensä ${report.totalEvents}.</p><p>${types || "Ei merkittäviä tapahtumia tällä rajalla."}</p></section><section class="detail-box"><h3>Suodatettu pois</h3><p>${h["normal-source"]} normaalia pysyvää lähdettä · ${h.agricultural} pelto- tai ruohikkopolttoa · ${h["small-vegetation"]} pientä kasvillisuuspaloa · ${h.minor} muuta vähäistä.</p>${c ? `<p>Vertailu raporttiin ${formatDate(c.previousDate)}${c.previousDate.slice(0, 4)} (${timeFormatter.format(new Date(c.previousGeneratedAt))} UTC): ${c.newCount} uutta, ${c.continuing} jatkuu, ${c.ended.length} ei enää merkittävä.</p>` : "<p>Tältä alueelta ei ole aiempaa raporttia tässä selaimessa.</p>"}</section></div>
+  <div class="area-actions"><button type="button" data-export="csv">Vie CSV</button><button type="button" data-export="geojson">Vie GeoJSON</button><button type="button" data-export="kml">Vie KML</button></div>
+  ${report.rows.length ? `<div class="table-scroll"><table class="area-table"><thead><tr><th>#</th><th>Pisteet</th><th>Tyyppi (arvio) / ympäristö</th><th>Koko</th><th>Kesto</th><th>Ajanjakso</th><th>OSM 1,5 km</th><th>Tila</th><th>Sijainti</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}
+  ${ended}
+  <p class="meta">Tyyppi ja merkittävyys ovat sääntöpohjaisia arvioita NASA FIRMS VIIRS -havainnoista, WorldCover 2021 -maanpeitteestä ja OpenStreetMap-kohdetiedoista (© OpenStreetMapin tekijät, ODbL). Ne eivät vahvista palon syytä. Raportti tallentuu vain tähän selaimeen (enintään 10 viimeisintä).</p>`;
+  const find = (id) => events.find((event) => event.id === id);
+  for (const button of elements.areaContent.querySelectorAll("[data-area-map]")) button.addEventListener("click", () => { const event = find(button.dataset.areaMap); if (event) { elements.areaDialog.close(); focusEvent(event); } });
+  for (const button of elements.areaContent.querySelectorAll("[data-area-open]")) button.addEventListener("click", () => { const event = find(button.dataset.areaOpen); if (event) { elements.areaDialog.close(); openEvent(event); } });
+  const exporters = { csv: [reportToCsv, "text/csv;charset=utf-8", "csv"], geojson: [reportToGeoJson, "application/geo+json", "geojson"], kml: [reportToKml, "application/vnd.google-earth.kml+xml", "kml"] };
+  for (const button of elements.areaContent.querySelectorAll("[data-export]")) button.addEventListener("click", () => { const [fn, type, ext] = exporters[button.dataset.export]; download(fn(report), type, `alueanalyysi-${report.date}.${ext}`); });
+}
+
+function download(content, type, filename) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement("a"); link.href = url; link.download = filename; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function formatScore(value) { return Number.isFinite(value) ? numberFormatter.format(value) : "—"; }
@@ -584,6 +727,7 @@ function renderOpenEvent() {
     <section id="deep-analysis" class="deep-analysis"></section>
     <p class="event-coordinates">GPS-koordinaatit (WGS84): <strong id="event-coordinates-value">${event.latitude.toFixed(5)}, ${event.longitude.toFixed(5)}</strong> <button id="copy-coordinates" type="button" aria-label="Kopioi GPS-koordinaatit leikepöydälle">Kopioi</button></p>
     <p class="details-meta">D0 ${formatDate(selectedDate)}${selectedDate.slice(0,4)} · UTC</p>
+    <section id="significance-box" class="detail-box significance-box"></section>
     <section class="detail-box evidence-summary"><h3>Mitä kohteesta voidaan päätellä?</h3><p><strong>${escapeHtml(priorityFor(event).label)}</strong></p><p>${escapeHtml(priorityFor(event).reason)}</p><p>${evidence.date ? formatDate(evidence.date) : "—"}: ${evidence.passCount} ajoitettua ylilentoa, ${evidence.satellites} satelliittia. ${evidence.repeated ? "Useat havainnot tukevat lämpötapahtuman olemassaoloa; ne eivät varmista palavaa materiaalia." : "Yksittäistä tai puutteellisesti ajoitettua havaintoa ei pidetä vahvana tyyppinäyttönä."}</p><p>Viimeisin ajoitettu havainto: ${evidence.latest ? formatDate(evidence.date) + " " + evidence.latest.slice(11) + " UTC" : "—"}. FRP suhteessa oman vertailuryhmän mediaaniin: ${Number.isFinite(evidence.ratio) ? formatScore(evidence.ratio) + "× (päivän suurin suhde)" : "ei riittävää vertailua"}.</p><p class="meta">Rakennuspaloa, jalostamoa tai räjähdevarastoa ei nimetä ilman niitä erottavaa havaintonäyttöä.</p></section>
     <div class="detail-grid"><section class="detail-box"><h3>Lämpötilanne</h3><p>${escapeHtml(priorityFor(event).reason)}</p><p>Havaintopäivät: ${event.activeDates.map(formatDate).join(", ") || "—"}.</p><p>${event.kind === "fire" ? `${event.currentPassCount} ylilentoa D0:lla. Pieni pistemäärä ei sulje pois paloa.` : `Pysyvyys ${event.persistenceActiveDayCount}/13 vertailupäivää. ${event.comparableCurrentPasses}/${event.currentPassCount} täysin vertailukelpoista ylilentoa D0:lla.`}</p><p>Näyttö: ${escapeHtml(event.reliability.label)}. ${escapeHtml((event.reliability.reasons||[]).join("; "))}</p>${event.changePoint ? `<p>Muutoskohta ${formatDate(event.changePoint.date)}: ${escapeHtml(event.changePoint.group)} · FRP ${formatScore(event.changePoint.frpRatio)}×. Vertailu päättyy ${formatDate(event.baselinePeriod.end)}. Historiallinen muutos ei yksin vahvista nykyistä paloa.</p>` : ""}</section><section class="detail-box"><h3>${escapeHtml(env.label)}</h3><p>${escapeHtml(envDetails)}</p><p>ESA WorldCover 2021: näytteet kuvaavat ympäristöä, eivät palavaa rakennusta tai materiaalia. Vuoden 2021 jälkeen muuttunut maanpeite voi johtaa virheeseen.</p><p>${escapeHtml(event.behavior?.label || "")}. ${escapeHtml(event.behavior?.candidate || "")}</p></section></div>
     <h3>FRP 14 vuorokaudelta</h3><p>Jokainen pylväs on päivän voimakkain ylilento, MW. Taulukossa ovat kaikki ylilennot erikseen. Puuttuva arvo ei ole 0 MW. Pylvään valinta vaihtaa tarkastelupäivän.</p>${renderFrpProfile(event,selectedDate)}
@@ -593,6 +737,8 @@ function renderOpenEvent() {
     ${env.counts ? `<h3>Maanpeitenäytteiden jakauma</h3><div class="table-scroll"><table><thead><tr><th>Luokka</th><th>Näytteitä</th></tr></thead><tbody>${Object.entries(env.counts).map(([code,n])=>`<tr><td>${escapeHtml(LANDCOVER_CLASSES[code] || code)}</td><td>${n}</td></tr>`).join("")}</tbody></table></div>` : ""}
     <p class="details-meta">© ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium. CC BY 4.0. Tapahtuman käyttöpaikkaa ei haeta kohdeluettelosta.</p>`;
   renderDetailSection(event);
+  renderSignificanceBox(event);
+  if (!event.siteContext) void loadSiteContextFor(event);
   elements.eventDialogContent.querySelector("#copy-coordinates").addEventListener("click", () => copyCoordinates(event));
   for (const button of elements.eventDialogContent.querySelectorAll("[data-select-date]")) button.addEventListener("click",()=>selectDay(button.dataset.selectDate));
   for (const bar of elements.eventDialogContent.querySelectorAll("[data-frp-height]")) bar.style.height = `${bar.dataset.frpHeight}%`;
@@ -626,6 +772,8 @@ async function fetchEventDetail(event, force = false) {
     if (!response.ok) throw new Error(payload.error?.message || "Kohdehaku epäonnistui.");
     detail.analysis = buildDetailAnalysis(payload,event,detail.radiusKm);
     detail.status = "ready";
+    event.detailSummary = summarizeDetail(detail.analysis);
+    renderSignificanceBox(event);
   } catch (error) {
     if (controller.signal.aborted || state.detail !== detail) return;
     detail.status = "error"; detail.error = error.name === "TimeoutError" ? "Kohdehaku aikakatkaistiin. Yritä 14 päivän jaksoa tai päivitä uudelleen." : error.message;
@@ -761,7 +909,7 @@ function showTooltipFor(event) {
   const point = screenPoint(event);
   const peak = periodFrpPeak(event.frpProfile, state.data.analysisRange.start, state.data.analysisRange.end);
   const periodPeak = peak ? `${formatScore(peak.frp)} MW (${formatDate(peak.date)})` : "— MW (ei laskettavaa arvoa)";
-  elements.tooltip.innerHTML = `<strong>${escapeHtml(eventTitle(event))}</strong>${event.latitude.toFixed(4)}, ${event.longitude.toFixed(4)}<br />${escapeHtml(environmentalContext(event).label)}<br />D0 FRP-huippu ${formatScore(event.currentPeakPassFrp)} MW<br /><span class="period-frp-peak">14 vrk FRP-huippu ${periodPeak}</span><br />Havaintopäivät: ${event.activeDates.map(formatDate).join(", ")}<br /><button type="button">Avaa tiedot ja FRP</button>`;
+  elements.tooltip.innerHTML = `<strong>${escapeHtml(eventTitle(event))}</strong><span class="tooltip-significance">${escapeHtml(assessSignificance(event).type.label)} · merkittävyys ${assessSignificance(event).score}/100</span><br />${event.latitude.toFixed(4)}, ${event.longitude.toFixed(4)}<br />${escapeHtml(environmentalContext(event).label)}<br />D0 FRP-huippu ${formatScore(event.currentPeakPassFrp)} MW<br /><span class="period-frp-peak">14 vrk FRP-huippu ${periodPeak}</span><br />Havaintopäivät: ${event.activeDates.map(formatDate).join(", ")}<br /><button type="button">Avaa tiedot ja FRP</button>`;
   elements.tooltip.querySelector("button").addEventListener("click",()=>openEvent(event));
   elements.tooltip.hidden = false;
   const width = elements.tooltip.offsetWidth, height = elements.tooltip.offsetHeight;

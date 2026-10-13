@@ -1,4 +1,4 @@
-import { formatDate } from "./format.js?v=20261013.1";
+import { formatDate } from "./format.js?v=20261013.2";
 const n = (v) => Number.isFinite(v) ? new Intl.NumberFormat("fi-FI", {maximumFractionDigits:1}).format(v) : "—";
 const e = (v) => String(v ?? "").replace(/[&<>"']/g,(c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const when = (p) => p ? `${formatDate(p.date)}${p.date.slice(0,4)} ${e(p.time)} UTC` : "—";

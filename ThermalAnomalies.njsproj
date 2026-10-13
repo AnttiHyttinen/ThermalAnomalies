@@ -32,8 +32,13 @@
   </PropertyGroup>
   <!-- Content items (and node_modules) are published to Azure; None items stay local. -->
   <ItemGroup>
+    <Content Include="public\area-analysis.js" />
+    <Content Include="public\significance.js" />
     <Content Include="server.mjs" />
     <Content Include="server.cjs" />
+    <Content Include="src\site-context.mjs" />
+    <Content Include="tests\significance.test.mjs" />
+    <Content Include="tests\site-context.test.mjs" />
     <Content Include="web.config" />
     <Content Include="package.json" />
     <Content Include="package-lock.json" />

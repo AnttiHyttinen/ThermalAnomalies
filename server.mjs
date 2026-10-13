@@ -20,12 +20,21 @@ import {
   validateSelectedDate,
 } from "./src/firms.mjs";
 import { assessLandcover, validateContextRequest } from "./src/landcover.mjs";
+import { assessSites, validateSiteRequest } from "./src/site-context.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const publicRoot = join(root, "public");
 const port = Number(process.env.PORT || 4173);
 const responseCache = new Map();
 const CACHE_TTL_MS = 10 * 60 * 1000;
+const SEGMENT_CONCURRENCY = 3;
+
+async function mapLimit(items, limit, worker) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) await worker(items[next++]);
+  }));
+}
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -55,6 +64,11 @@ export async function handler(request, response) {
       return;
     }
 
+    if (url.pathname === "/api/site-context") {
+      await handleSiteContext(request, response);
+      return;
+    }
+
     await serveStatic(request, response, url.pathname);
   } catch (error) {
     if (response.destroyed) return;
@@ -73,22 +87,35 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   server.listen(port, () => console.log(`Lämpöpoikkeamat: http://localhost:${port}`));
 }
 
+async function readJsonBody(request, limit) {
+  const chunks = [];
+  let bytes = 0;
+  for await (const chunk of request) {
+    bytes += chunk.length;
+    if (bytes > limit) throw Object.assign(new Error("Pyyntö on liian suuri."), { status: 413 });
+    chunks.push(chunk);
+  }
+  try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
+  catch { throw Object.assign(new Error("Virheellinen JSON-pyyntö."), { status: 400 }); }
+}
+
+async function handleSiteContext(request, response) {
+  if (request.method !== "POST") {
+    response.setHeader("Allow", "POST");
+    return sendJson(response, 405, { error: { message: "Vain POST on sallittu." } });
+  }
+  const points = validateSiteRequest(await readJsonBody(request, 16000));
+  const controller = new AbortController();
+  response.on("close", () => controller.abort());
+  sendJson(response, 200, { results: await assessSites(points, { signal: controller.signal }) });
+}
+
 async function handleLandcover(request, response) {
   if (request.method !== "POST") {
     response.setHeader("Allow", "POST");
     return sendJson(response, 405, { error: { message: "Vain POST on sallittu." } });
   }
-  const chunks = [];
-  let bytes = 0;
-  for await (const chunk of request) {
-    bytes += chunk.length;
-    if (bytes > 96000) throw Object.assign(new Error("Maanpeitepyyntö on liian suuri."), { status: 413 });
-    chunks.push(chunk);
-  }
-  let body;
-  try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
-  catch { throw Object.assign(new Error("Virheellinen JSON-pyyntö."), { status: 400 }); }
-  const events = validateContextRequest(body);
+  const events = validateContextRequest(await readJsonBody(request, 96000));
   const controller = new AbortController();
   response.on("close", () => controller.abort());
   const results = [];
@@ -120,6 +147,7 @@ async function handleHotspots(request, response, url) {
   const userKey = String(request.headers["x-firms-map-key"] || "").trim();
   const sharedKey = String(process.env.NASA_FIRMS_MAP_KEY || "").trim();
   const mapKey = userKey || (isLikelyMapKey(sharedKey) ? sharedKey : "");
+  const sharedCache = !userKey && !url.searchParams.has("refresh") ? "public, max-age=0, s-maxage=600, stale-while-revalidate=300" : "no-store";
 
   if (!mapKey) {
     sendJson(response, 401, {
@@ -143,7 +171,7 @@ async function handleHotspots(request, response, url) {
   const cached = responseCache.get(cacheKey);
   const bypassCache = url.searchParams.has("refresh");
   if (!bypassCache && cached && Date.now() - cached.createdAt < CACHE_TTL_MS) {
-    response.setHeader("Cache-Control", "no-store");
+    response.setHeader("Cache-Control", sharedCache);
     response.setHeader("X-Cache", "HIT");
     sendJson(response, 200, cached.payload);
     return;
@@ -155,7 +183,7 @@ async function handleHotspots(request, response, url) {
   if (response.destroyed) return;
   responseCache.set(cacheKey, { createdAt: Date.now(), payload: result });
   pruneCache();
-  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Cache-Control", sharedCache);
   response.setHeader("X-Cache", "MISS");
   sendJson(response, 200, result);
 }
@@ -166,7 +194,7 @@ export async function fetchFourteenDays({ mapKey, area, today, signal, totalDays
     const detections = [];
     const successfulSegments = [];
     const failedSegments = [];
-    for (const segment of segments) {
+    await mapLimit(segments, SEGMENT_CONCURRENCY, async (segment) => {
       signal?.throwIfAborted();
       const url = buildFirmsUrl({ mapKey, source, area, ...segment });
       try {
@@ -177,7 +205,9 @@ export async function fetchFourteenDays({ mapKey, area, today, signal, totalDays
         signal?.throwIfAborted();
         failedSegments.push({ segment, error });
       }
-    }
+    });
+    successfulSegments.sort((a, b) => a.start.localeCompare(b.start));
+    failedSegments.sort((a, b) => a.segment.start.localeCompare(b.segment.start));
     return { source, detections, successfulSegments, failedSegments };
   }));
 

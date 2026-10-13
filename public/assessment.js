@@ -1,3 +1,5 @@
+import { assessSignificance, DEFAULT_MIN_SIGNIFICANCE, TREND_LABELS } from "./significance.js?v=20261013.2";
+
 // Land cover describes the surroundings. It never determines a fire's fuel or a site's purpose.
 export const LANDCOVER_CLASSES = {
   10: "Puut", 20: "Pensaat", 30: "Ruohikko", 40: "Viljelysmaa", 50: "Rakennettu",
@@ -65,13 +67,14 @@ export function priorityFor(event) {
   return { rank: 3, label: "Paikallinen lämpötapahtuma", reason: "Maastopaloa tai muuta paloa ei voi vielä erottaa. Kohde säilyy tarkistettavissa." };
 }
 
-export function visibleEvents(events, { filter = "attention", includeHistory = false, minFrp = 0, sort = "priority", repeatedOnly = false } = {}) {
+export function visibleEvents(events, { filter = "attention", includeHistory = false, minFrp = 0, sort = "priority", repeatedOnly = false, minSignificance = DEFAULT_MIN_SIGNIFICANCE } = {}) {
   return events.filter((event) => {
     if (!includeHistory && !event.activeToday && event.kind !== "source-unknown") return false;
     if (repeatedOnly && !observationEvidence(event).repeated) return false;
     const frp = includeHistory ? event.displayPeakPassFrp : event.currentPeakPassFrp;
     if (minFrp > 0 && (!Number.isFinite(frp) || frp < minFrp)) return false;
     const env = environmentalContext(event).id;
+    if (filter === "significant") return assessSignificance(event).score >= minSignificance;
     if (filter === "attention") return event.kind !== "persistent-source" && !likelyVegetation(event);
     if (filter === "built") return ["built", "mixed"].includes(env);
     if (filter === "sources") return event.kind !== "fire";
@@ -81,6 +84,7 @@ export function visibleEvents(events, { filter = "attention", includeHistory = f
     return true;
   }).sort((a, b) => {
     const frp = (e) => (includeHistory ? e.displayPeakPassFrp : e.currentPeakPassFrp) ?? -1;
+    if (sort === "significance") { const difference = assessSignificance(b).score - assessSignificance(a).score; if (difference) return difference; }
     if (sort === "frp" && frp(a) !== frp(b)) return frp(b) - frp(a);
     if (sort === "latest") { const difference = (observationEvidence(b).latest || "").localeCompare(observationEvidence(a).latest || ""); if (difference) return difference; }
     if (sort === "ratio") { const difference = (observationEvidence(b).ratio ?? -1) - (observationEvidence(a).ratio ?? -1); if (difference) return difference; }
@@ -99,8 +103,25 @@ export function selectionDate(selection, now = new Date()) {
 }
 
 export function exportEventsCsv(events, selectedDate) {
-  const rows = [["Päivä UTC", "Leveysaste", "Pituusaste", "Lämpötilanne", "Ympäristö", "D0 FRP huippu MW", "D0 ylilennot", "Vertailupäivät", "Havaintopäivät", "Näytön rajat", "Havaintopäivän ajoitetut ylilennot", "FRP suhteessa mediaaniin", "Rakennettu osuus pikselissä", "Rakennettu osuus puskurissa"]];
-  for (const e of events) rows.push([selectedDate, e.latitude, e.longitude, priorityFor(e).label, environmentalContext(e).label, e.currentPeakPassFrp, e.currentPassCount, e.persistenceActiveDayCount, e.activeDates.join(" "), priorityFor(e).reason, observationEvidence(e).passCount, observationEvidence(e).ratio, environmentalContext(e).pixelBuiltFraction, environmentalContext(e).builtFraction]);
+  const rows = [["Päivä UTC", "Leveysaste", "Pituusaste", "Lämpötilanne", "Ympäristö", "D0 FRP huippu MW", "D0 ylilennot", "Vertailupäivät", "Havaintopäivät", "Näytön rajat", "Havaintopäivän ajoitetut ylilennot", "FRP suhteessa mediaaniin", "Rakennettu osuus pikselissä", "Rakennettu osuus puskurissa", "Merkittävyys 0-100", "Merkittävyystaso", "Tapahtumatyyppi (arvio)", "Kokoluokka", "Arvioitu energia GJ", "Yöhavainnot", "Kehitys"]];
+  for (const e of events) rows.push([selectedDate, e.latitude, e.longitude, priorityFor(e).label, environmentalContext(e).label, e.currentPeakPassFrp, e.currentPassCount, e.persistenceActiveDayCount, e.activeDates.join(" "), priorityFor(e).reason, observationEvidence(e).passCount, observationEvidence(e).ratio, environmentalContext(e).pixelBuiltFraction, environmentalContext(e).builtFraction, ...significanceColumns(e)]);
   const quote = (value) => `"${(typeof value === "string" ? value.replace(/^[=+@-]/, "'$&") : String(value ?? "")).replaceAll('"', '""')}"`;
   return "\uFEFF" + rows.map((row) => row.map(quote).join(";")).join("\r\n");
+}
+
+function significanceColumns(event) {
+  const s = assessSignificance(event);
+  return [s.score, s.level.label, s.type.label, s.size.label, Math.round(s.features.energyGj), s.features.nightPasses, TREND_LABELS[s.features.trend]];
+}
+
+// Counts what the significance filter hides so the list can say why.
+export function hiddenBySignificance(events, { includeHistory = false, minSignificance = DEFAULT_MIN_SIGNIFICANCE } = {}) {
+  const counts = { "normal-source": 0, agricultural: 0, "small-vegetation": 0, minor: 0 };
+  for (const event of events) {
+    if (!includeHistory && !event.activeToday && event.kind !== "source-unknown") continue;
+    const s = assessSignificance(event);
+    if (s.score >= minSignificance) continue;
+    counts[s.filterReason && counts[s.filterReason] !== undefined ? s.filterReason : event.kind === "persistent-source" ? "normal-source" : "minor"] += 1;
+  }
+  return counts;
 }

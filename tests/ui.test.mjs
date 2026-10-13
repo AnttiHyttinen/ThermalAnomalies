@@ -38,6 +38,7 @@ test("UI switches day, clears stale results, opens FRP details and handles racin
   const response=(date)=>new Response(JSON.stringify({generatedAt:`${date}T12:00:00Z`,range:{start:addUtcDays(date,-6),end:date,days:7},analysisRange:{start:addUtcDays(date,-13),end:date,days:14},coverageComplete:true,warnings:[],detections:(historical ? [{date:addUtcDays(date,-2),frp:80},{date:addUtcDays(date,-10),frp:140}] : [{date,frp:80}]).map((p)=>({latitude:60,longitude:25,time:"00:10",confidence:"n",satellite:"N20",source:"VIIRS_NOAA20_NRT",daynight:"N",...p}))}));
   set("fetch",async(url,options)=>{
     if(String(url).startsWith("/api/landcover")) return new Response(JSON.stringify({results:JSON.parse(options.body).events.map((event)=>({id:event.id,environment:{id:"built",label:"Rakennettua lämpöpikselien ympärillä",status:"ready",counts:{50:25},sampleCount:25,known:25,totalPoints:1,sampledPoints:1,builtFraction:1,vegetationFraction:0}}))}));
+    if(String(url).startsWith("/api/site-context")) return new Response(JSON.stringify({results:JSON.parse(options.body).points.map((point)=>({id:point.id,siteContext:{status:"ready",categories:{oilGas:3,storage:4},nearestKm:{oilGas:0.4,storage:0.2},names:["Test depot"]}}))}));
     if(String(url).startsWith("/api/event-data")) {
       detailRequests.push({url,options});
       const date=new URL(url,"http://localhost").searchParams.get("date");
@@ -109,6 +110,17 @@ test("UI switches day, clears stale results, opens FRP details and handles racin
   const coordinates=document.querySelector("#event-coordinates-value").textContent;assert.match(coordinates,/^-?\d+\.\d{5}, -?\d+\.\d{5}$/);
   let copied=null;set("navigator",{clipboard:{writeText:async(text)=>{copied=text;}}});
   document.querySelector("#copy-coordinates").click();await flush();assert.equal(copied,coordinates);assert.ok(document.querySelector("#toast").textContent.includes("Koordinaatit kopioitu"));
+  const significance=document.querySelector("#significance-box").textContent;
+  assert.ok(significance.includes("Merkittävyys"));assert.ok(significance.includes("Öljy-, kaasu- tai polttoainekohde"));assert.ok(significance.includes("Test depot"));
+  assert.ok(document.querySelector(".sig-badge"));
+  document.querySelector("#event-dialog-close").click();
+  document.querySelector("#area-analysis-button").click();for(let i=0;i<5;i++)await flush();
+  assert.equal(document.querySelector("#area-dialog").open,true);
+  assert.ok(document.querySelector("#area-status").textContent.startsWith("Valmis"),document.querySelector("#area-status").textContent);
+  assert.ok(document.querySelector("#area-content").textContent.includes("1 merkittävää tapahtumaa"));
+  assert.equal(document.querySelectorAll(".area-table tbody tr").length,1);
+  assert.ok(persistentStorage.has("area-reports-v1"));
+  document.querySelector("#area-dialog-close").click();
   document.querySelector("#reasoning-button").click();assert.equal(document.querySelector("#reasoning-dialog").open,true);document.querySelector("#reasoning-close").click();
   const selector=document.querySelector("#selected-date");selector.value="2026-08-29";selector.dispatchEvent(new window.Event("change"));await flush();
   assert.equal(requests.at(-1),"2026-08-29");assert.ok(document.querySelector("#range-title").textContent.includes("29.8.2026"));
