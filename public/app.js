@@ -12,7 +12,8 @@ document.querySelector("#reasoning-content").innerHTML = REASONING_HTML;
 const TILE_SIZE = 256;
 const MIN_ZOOM = 5;
 const MAX_ZOOM = 13;
-const INITIAL_VIEW = { longitude: 34.2, latitude: 45.3, zoom: 8 };
+const INITIAL_VIEW = { longitude: 24.9384, latitude: 60.1699, zoom: 8 };
+const GEOLOCATION_TIMEOUT_MS = 5000;
 const DAY_COLORS = ["#7f6b53", "#90734f", "#a77c4c", "#bd8445", "#d88a3d", "#ee8240", "#ff5f38"];
 const MAP_STYLES = new Set(["dark", "light", "grayscale"]);
 
@@ -115,6 +116,24 @@ const state = {
 };
 
 const mapFetch = createDebouncedAction(() => fetchData());
+const initialLocation = locateUser();
+
+function locateUser() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve();
+    const timer = setTimeout(resolve, GEOLOCATION_TIMEOUT_MS + 1000);
+    navigator.geolocation.getCurrentPosition((position) => {
+      clearTimeout(timer);
+      const untouched = state.zoom === INITIAL_VIEW.zoom && state.center.latitude === INITIAL_VIEW.latitude && state.center.longitude === INITIAL_VIEW.longitude;
+      if (untouched) {
+        state.center = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+        if (state.width && state.height) renderMap();
+        if (state.requestVersion > 0) fetchData();
+      }
+      resolve();
+    }, () => { clearTimeout(timer); resolve(); }, { timeout: GEOLOCATION_TIMEOUT_MS, maximumAge: 10 * 60 * 1000 });
+  });
+}
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
@@ -164,7 +183,7 @@ new ResizeObserver(([entry]) => {
   state.width = Math.max(1, Math.round(box.width));
   state.height = Math.max(1, Math.round(box.height));
   renderMap();
-  if (!wasReady) fetchData();
+  if (!wasReady) initialLocation.then(() => { if (state.requestVersion === 0) fetchData(); });
 }).observe(elements.map);
 
 elements.keyForm.addEventListener("submit", (event) => {
