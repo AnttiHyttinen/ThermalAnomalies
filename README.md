@@ -1,6 +1,6 @@
 # Kohteen kehitysanalyysi · 2026.10.13.1
 
-Klikkaa karttakohdetta tai listan tietopainiketta. Sovellus hakee valitulle kohteelle 28 vrk:n VIIRS- ja MODIS NRT -aineiston. Vaihda tarvittaessa 14 vrk:een tai säädä paikallinen säde 1–20 km. Paina Hae kohde uudelleen. Tuloksena on FRP-aikasarja, nousun ajoitus, ylilentojen muutokset, pistekohtainen sijaintikuva, aineiston aukot ja CSV-vienti. MODIS näkyy erillisenä tukiaineistona. Tarkat kynnysarvot ovat sovelluksen Päättelyn perusteet -ikkunassa.
+Klikkaa karttakohdetta tai listan tietopainiketta. Sovellus hakee valitulle kohteelle 28 vrk:n VIIRS- ja MODIS NRT -aineiston. Vaihda tarvittaessa 14, 7 tai 6 vrk:een tai säädä paikallinen säde 1–20 km. Paina Hae kohde uudelleen. Kohteen GPS-koordinaatit (WGS84) näkyvät tiedoissa, ja Kopioi-painike vie ne leikepöydälle. Tuloksena on FRP-aikasarja, nousun ajoitus, ylilentojen muutokset, pistekohtainen sijaintikuva, aineiston aukot ja CSV-vienti. MODIS näkyy erillisenä tukiaineistona. Tarkat kynnysarvot ovat sovelluksen Päättelyn perusteet -ikkunassa.
 
 Tämä on satelliittihavaintojen tulkinta. Se ei vahvista syttymisaikaa, sammutusta, polttoainetta, katon romahtamista tai palanutta pinta-alaa. Lähekkäiset lähteet voivat sekoittua samaan hakusäteeseen. NRT-historian saatavuus riippuu NASA:sta; onnistunut tyhjä haku ei takaa peittoa. Kartan 14 vrk:n luokitus ja pidempi kohdeanalyysi esitetään erikseen.
 

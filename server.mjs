@@ -112,8 +112,8 @@ async function handleHotspots(request, response, url) {
   const today = validateSelectedDate(url.searchParams.get("date"));
   const detail = url.pathname === "/api/event-data";
   const totalDays = detail ? Number(url.searchParams.get("days") || 28) : 14;
-  if (detail && (![14, 28].includes(totalDays) || (area.east - area.west) * Math.cos((area.north + area.south) / 2 * Math.PI / 180) > 0.5 || area.north - area.south > 0.5)) {
-    return sendJson(response, 400, { error: { code: "INVALID_DETAIL_AREA", message: "Kohdehaku sallii 14 tai 28 päivää ja enintään noin 55 km leveän alueen." } });
+  if (detail && (![6, 7, 14, 28].includes(totalDays) || (area.east - area.west) * Math.cos((area.north + area.south) / 2 * Math.PI / 180) > 0.5 || area.north - area.south > 0.5)) {
+    return sendJson(response, 400, { error: { code: "INVALID_DETAIL_AREA", message: "Kohdehaku sallii 6, 7, 14 tai 28 päivää ja enintään noin 55 km leveän alueen." } });
   }
   // The user's own key wins. An optional shared production key (NASA_FIRMS_MAP_KEY) is only a fallback;
   // without either, the client is told to ask the user for their own key.

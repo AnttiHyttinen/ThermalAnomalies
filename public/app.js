@@ -14,6 +14,7 @@ const MIN_ZOOM = 5;
 const MAX_ZOOM = 13;
 const INITIAL_VIEW = { longitude: 24.9384, latitude: 60.1699, zoom: 8 };
 const GEOLOCATION_TIMEOUT_MS = 5000;
+const DETAIL_PERIODS = [6, 7, 14, 28];
 const DAY_COLORS = ["#7f6b53", "#90734f", "#a77c4c", "#bd8445", "#d88a3d", "#ee8240", "#ff5f38"];
 const MAP_STYLES = new Set(["dark", "light", "grayscale"]);
 
@@ -581,7 +582,8 @@ function renderOpenEvent() {
   const detailedComparisons = (event.comparisons || []).filter((entry)=>entry.pass.date===selectedDate).map((entry)=>`<tr><td>${escapeHtml(entry.pass.satellite)} ${escapeHtml(entry.pass.time)} / ${escapeHtml(entry.pass.daynight)}</td><td>${entry.fullyComparable ? "Kyllä" : "Ei"}</td><td>${formatScore(entry.intensityScore)}</td><td>${formatScore(entry.extentScore)}</td><td>${formatScore(entry.metrics.pixelCount.median)}</td><td>${formatScore(entry.metrics.radius95.median)}</td><td>${entry.isAnomalous ? "Poikkeama" : entry.fullyComparable ? "Rajoissa" : "Riittämätön vertailu"}</td></tr>`).join("");
   elements.eventDialogContent.innerHTML = `
     <section id="deep-analysis" class="deep-analysis"></section>
-    <p class="details-meta">${event.latitude.toFixed(5)}, ${event.longitude.toFixed(5)} · D0 ${formatDate(selectedDate)}${selectedDate.slice(0,4)} · UTC</p>
+    <p class="event-coordinates">GPS-koordinaatit (WGS84): <strong id="event-coordinates-value">${event.latitude.toFixed(5)}, ${event.longitude.toFixed(5)}</strong> <button id="copy-coordinates" type="button" aria-label="Kopioi GPS-koordinaatit leikepöydälle">Kopioi</button></p>
+    <p class="details-meta">D0 ${formatDate(selectedDate)}${selectedDate.slice(0,4)} · UTC</p>
     <section class="detail-box evidence-summary"><h3>Mitä kohteesta voidaan päätellä?</h3><p><strong>${escapeHtml(priorityFor(event).label)}</strong></p><p>${escapeHtml(priorityFor(event).reason)}</p><p>${evidence.date ? formatDate(evidence.date) : "—"}: ${evidence.passCount} ajoitettua ylilentoa, ${evidence.satellites} satelliittia. ${evidence.repeated ? "Useat havainnot tukevat lämpötapahtuman olemassaoloa; ne eivät varmista palavaa materiaalia." : "Yksittäistä tai puutteellisesti ajoitettua havaintoa ei pidetä vahvana tyyppinäyttönä."}</p><p>Viimeisin ajoitettu havainto: ${evidence.latest ? formatDate(evidence.date) + " " + evidence.latest.slice(11) + " UTC" : "—"}. FRP suhteessa oman vertailuryhmän mediaaniin: ${Number.isFinite(evidence.ratio) ? formatScore(evidence.ratio) + "× (päivän suurin suhde)" : "ei riittävää vertailua"}.</p><p class="meta">Rakennuspaloa, jalostamoa tai räjähdevarastoa ei nimetä ilman niitä erottavaa havaintonäyttöä.</p></section>
     <div class="detail-grid"><section class="detail-box"><h3>Lämpötilanne</h3><p>${escapeHtml(priorityFor(event).reason)}</p><p>Havaintopäivät: ${event.activeDates.map(formatDate).join(", ") || "—"}.</p><p>${event.kind === "fire" ? `${event.currentPassCount} ylilentoa D0:lla. Pieni pistemäärä ei sulje pois paloa.` : `Pysyvyys ${event.persistenceActiveDayCount}/13 vertailupäivää. ${event.comparableCurrentPasses}/${event.currentPassCount} täysin vertailukelpoista ylilentoa D0:lla.`}</p><p>Näyttö: ${escapeHtml(event.reliability.label)}. ${escapeHtml((event.reliability.reasons||[]).join("; "))}</p>${event.changePoint ? `<p>Muutoskohta ${formatDate(event.changePoint.date)}: ${escapeHtml(event.changePoint.group)} · FRP ${formatScore(event.changePoint.frpRatio)}×. Vertailu päättyy ${formatDate(event.baselinePeriod.end)}. Historiallinen muutos ei yksin vahvista nykyistä paloa.</p>` : ""}</section><section class="detail-box"><h3>${escapeHtml(env.label)}</h3><p>${escapeHtml(envDetails)}</p><p>ESA WorldCover 2021: näytteet kuvaavat ympäristöä, eivät palavaa rakennusta tai materiaalia. Vuoden 2021 jälkeen muuttunut maanpeite voi johtaa virheeseen.</p><p>${escapeHtml(event.behavior?.label || "")}. ${escapeHtml(event.behavior?.candidate || "")}</p></section></div>
     <h3>FRP 14 vuorokaudelta</h3><p>Jokainen pylväs on päivän voimakkain ylilento, MW. Taulukossa ovat kaikki ylilennot erikseen. Puuttuva arvo ei ole 0 MW. Pylvään valinta vaihtaa tarkastelupäivän.</p>${renderFrpProfile(event,selectedDate)}
@@ -591,10 +593,21 @@ function renderOpenEvent() {
     ${env.counts ? `<h3>Maanpeitenäytteiden jakauma</h3><div class="table-scroll"><table><thead><tr><th>Luokka</th><th>Näytteitä</th></tr></thead><tbody>${Object.entries(env.counts).map(([code,n])=>`<tr><td>${escapeHtml(LANDCOVER_CLASSES[code] || code)}</td><td>${n}</td></tr>`).join("")}</tbody></table></div>` : ""}
     <p class="details-meta">© ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium. CC BY 4.0. Tapahtuman käyttöpaikkaa ei haeta kohdeluettelosta.</p>`;
   renderDetailSection(event);
+  elements.eventDialogContent.querySelector("#copy-coordinates").addEventListener("click", () => copyCoordinates(event));
   for (const button of elements.eventDialogContent.querySelectorAll("[data-select-date]")) button.addEventListener("click",()=>selectDay(button.dataset.selectDate));
   for (const bar of elements.eventDialogContent.querySelectorAll("[data-frp-height]")) bar.style.height = `${bar.dataset.frpHeight}%`;
 }
 
+
+async function copyCoordinates(event) {
+  const text = `${event.latitude.toFixed(5)}, ${event.longitude.toFixed(5)}`;
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(`Koordinaatit kopioitu: ${text}`);
+  } catch {
+    showToast(`Kopiointi epäonnistui. Koordinaatit: ${text}`);
+  }
+}
 
 async function fetchEventDetail(event, force = false) {
   state.detailController?.abort();
@@ -623,7 +636,7 @@ async function fetchEventDetail(event, force = false) {
 function renderDetailSection(event) {
   const root = document.querySelector("#deep-analysis"), detail = state.detail;
   if (!root || !detail) return;
-  root.innerHTML = `<div class="detail-controls"><label>Jakso <select id="detail-days"><option value="14"${detail.days===14 ? " selected" : ""}>14 vrk</option><option value="28"${detail.days===28 ? " selected" : ""}>28 vrk</option></select></label><label>Hakualueen säde (km) <input id="detail-radius" type="number" min="1" max="20" step="0.5" value="${detail.radiusKm}"></label><button id="detail-refresh" type="button">Hae kohde uudelleen</button><span role="status">${detail.status === "loading" ? "Haetaan kohteen tarkkaa VIIRS- ja MODIS-aineistoa…" : detail.status === "error" ? escapeHtml(detail.error) : "Kohdeaineisto haettu"}</span></div>${detail.analysis ? renderEvolution(detail.analysis) : '<p>Alla karttahaun aiemmat 14 vuorokauden tiedot. Tarkempi analyysi täydentyy oman haun valmistuttua.</p>'}`;
+  root.innerHTML = `<div class="detail-controls"><label>Jakso <select id="detail-days">${DETAIL_PERIODS.map((days) => `<option value="${days}"${detail.days===days ? " selected" : ""}>${days} vrk</option>`).join("")}</select></label><label>Hakualueen säde (km) <input id="detail-radius" type="number" min="1" max="20" step="0.5" value="${detail.radiusKm}"></label><button id="detail-refresh" type="button">Hae kohde uudelleen</button><span role="status">${detail.status === "loading" ? "Haetaan kohteen tarkkaa VIIRS- ja MODIS-aineistoa…" : detail.status === "error" ? escapeHtml(detail.error) : "Kohdeaineisto haettu"}</span></div>${detail.analysis ? renderEvolution(detail.analysis) : '<p>Alla karttahaun aiemmat 14 vuorokauden tiedot. Tarkempi analyysi täydentyy oman haun valmistuttua.</p>'}`;
   root.querySelector("#detail-refresh").addEventListener("click", () => {
     const radius = Number(root.querySelector("#detail-radius").value);
     if (!Number.isFinite(radius) || radius < 1 || radius > 20) return showToast("Valitse säde väliltä 1–20 km.");

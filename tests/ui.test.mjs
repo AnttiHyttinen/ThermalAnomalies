@@ -105,6 +105,10 @@ test("UI switches day, clears stale results, opens FRP details and handles racin
   assert.ok(document.querySelector(".evidence-summary").textContent.includes("Mitä kohteesta voidaan päätellä"));
   assert.equal(document.querySelectorAll(".frp-profile-day").length,14);
   assert.equal(document.querySelector(".frp-profile-day:last-child .frp-profile-bar").style.height,"100%");
+  assert.deepEqual([...document.querySelectorAll("#detail-days option")].map((o)=>o.getAttribute("value")),["6","7","14","28"]);
+  const coordinates=document.querySelector("#event-coordinates-value").textContent;assert.match(coordinates,/^-?\d+\.\d{5}, -?\d+\.\d{5}$/);
+  let copied=null;set("navigator",{clipboard:{writeText:async(text)=>{copied=text;}}});
+  document.querySelector("#copy-coordinates").click();await flush();assert.equal(copied,coordinates);assert.ok(document.querySelector("#toast").textContent.includes("Koordinaatit kopioitu"));
   document.querySelector("#reasoning-button").click();assert.equal(document.querySelector("#reasoning-dialog").open,true);document.querySelector("#reasoning-close").click();
   const selector=document.querySelector("#selected-date");selector.value="2026-08-29";selector.dispatchEvent(new window.Event("change"));await flush();
   assert.equal(requests.at(-1),"2026-08-29");assert.ok(document.querySelector("#range-title").textContent.includes("29.8.2026"));
