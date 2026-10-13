@@ -1,4 +1,4 @@
-import { classifyEventBehavior, pixelAreaKm2 } from "./event-type.js?v=20260908.2";
+import { classifyEventBehavior, pixelAreaKm2 } from "./event-type.js?v=20261013.1";
 
 const EARTH_RADIUS_KM = 6371.0088;
 const STATIC_HOTSPOT_TYPES = new Set([1, 2, 3]);

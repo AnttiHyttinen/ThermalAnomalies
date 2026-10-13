@@ -1,4 +1,4 @@
-# Julkaisu omalle GitHub-tilille
+﻿# Julkaisu omalle GitHub-tilille
 
 GitHubiin siirretään lähdekoodi. Sovelluksen ajaminen verkossa tarvitsee lisäksi Node-palvelimen: GitHub Pages tarjoaa staattisia tiedostoja eikä suorita tämän sovelluksen FIRMS- tai maanpeiterajapintoja.
 
@@ -60,7 +60,7 @@ Valitse palvelu, joka ajaa Node-verkkopalvelimia, ja yhdistä siihen edellä luo
 
 Palvelin kuuntelee alustan antamaa porttia. Julkaise koko sovellus ja molemmat API-reitit samalla osoitteella. Staattisen public-kansion julkaiseminen yksin ei riitä. Koontikomentoa ei tarvita asennuksen lisäksi. Pitkien havainto- ja maanpeitehakujen takia alustan pyyntöaikarajan on riitettävä; selain sallii FIRMS-haulle 130 s ja maanpeite-erälle 190 s. Lyhyen aikarajan palvelu vaatii jatkokehitystä.
 
-**Älä lisää NASA_FIRMS_MAP_KEY-avainta palvelun ympäristömuuttujiin tai GitHub Secrets -asetuksiin.** Jokainen käyttäjä avaa sovelluksen ja syöttää oman avaimensa Oma API-avain -kohdassa. Palvelin hyväksyy vain pyynnön mukana lähetetyn avaimen. Se ei tarjoa käyttäjille ylläpitäjän avainta.
+**NASA_FIRMS_MAP_KEY on valinnainen.** Ilman sitä jokainen käyttäjä syöttää oman avaimensa, ja sovellus kysyy sitä heti avattaessa. Jos tuotantoon otetaan yhteinen avain, aseta se palvelun ympäristömuuttujaksi (ei koodiin eikä repoon); palvelin käyttää sitä vain käyttäjille, joilla ei ole omaa avainta. Yhteistä avainta ei koskaan lähetetä selaimelle.
 
 Avain muistetaan sivustokohtaisesti samassa selainprofiilissa. Eri osoite (esimerkiksi localhost ja julkaistu palvelu) tarvitsee oman syötön. Avaimen voi vaihtaa tai unohtaa sovelluksessa. Selain lähettää avaimen palvelimelle otsakkeessa, ja palvelin välittää sen NASA:lle; pidä pyyntöotsakkeet ja NASA:n avaimelliset URL-osoitteet poissa lokeista.
 

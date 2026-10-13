@@ -1,4 +1,16 @@
-# Lämpöpoikkeamat · paketti 2026.09.08.2
+﻿# Kohteen kehitysanalyysi · 2026.10.13.1
+
+Klikkaa karttakohdetta tai listan tietopainiketta. Sovellus hakee valitulle kohteelle 28 vrk:n VIIRS- ja MODIS NRT -aineiston. Vaihda tarvittaessa 14 vrk:een tai säädä paikallinen säde 1–20 km. Paina Hae kohde uudelleen. Tuloksena on FRP-aikasarja, nousun ajoitus, ylilentojen muutokset, pistekohtainen sijaintikuva, aineiston aukot ja CSV-vienti. MODIS näkyy erillisenä tukiaineistona. Tarkat kynnysarvot ovat sovelluksen Päättelyn perusteet -ikkunassa.
+
+Tämä on satelliittihavaintojen tulkinta. Se ei vahvista syttymisaikaa, sammutusta, polttoainetta, katon romahtamista tai palanutta pinta-alaa. Lähekkäiset lähteet voivat sekoittua samaan hakusäteeseen. NRT-historian saatavuus riippuu NASA:sta; onnistunut tyhjä haku ei takaa peittoa. Kartan 14 vrk:n luokitus ja pidempi kohdeanalyysi esitetään erikseen.
+
+Käyttäjän avainta ei tallenneta projektiin eikä palvelimen yhteiseksi avaimeksi.
+
+Päivitys: korvaa projektin tiedostot, aja `npm install` tarvittaessa ja käynnistä palvelin uudelleen. Paketti sisältää myös tuotannon Node-riippuvuudet. GitHub-repon nimi säilyy `thermal-anomalies`.
+
+---
+
+# Lämpöpoikkeamat · paketti 2026.09.15.1
 
 Sovellus auttaa löytämään rakennetun ympäristön lämpötapahtumia ja pysyvien lämpölähteiden poikkeamia. Se hakee NASA FIRMSin VIIRS-havainnot valitulta UTC-päivältä ja sitä edeltäviltä 13 päivältä. Kohteet ja niiden normaalitasot muodostetaan jokaisella ajolla uudelleen. Maailmanlaajuista kohde-, tehdas- tai rakennusluetteloa ei tarvita.
 
@@ -12,9 +24,9 @@ cp .env.example .env
 npm run dev
 ```
 
-Avaa selaimessa `http://localhost:4173`. Windowsissa `.env.example`-tiedoston voi kopioida `.env`-nimiseksi tiedostoselaimella. Syötä oma avain sovelluksessa. Avain muistetaan tämän selaimen localStorage-tallennuksessa sivuston osoitteelle. Yhteistä palvelinavainta ei käytetä, vaikka vanhassa ympäristössä olisi NASA_FIRMS_MAP_KEY-muuttuja. “Oma API-avain” avaa avaimen vaihdon ja poistamisen. Maksuton avain: [NASA FIRMS MAP_KEY](https://firms.modaps.eosdis.nasa.gov/api/map_key/).
+Valinnainen NASA_FIRMS_MAP_KEY-ympäristömuuttuja on varattu tuotannon mahdolliselle yhteiselle avaimelle: jos se on asetettu, palvelin käyttää sitä käyttäjälle, jolla ei ole omaa avainta. Jos muuttuja puuttuu tai on tyhjä, sovellus käynnistyy normaalisti ja kysyy heti käyttäjän oman avaimen. Käyttäjän oma avain ohittaa aina yhteisen avaimen.
 
-Paketointikorjaus 2026.09.05.2 sisältää **geotiff-kirjaston ja kaikki sen ajonaikaiset riippuvuudet node_modules-kansiossa**. Pura myös tämä kansio palvelimen viereen. Käynnistys ei vaadi erillistä npm-asennusta. Jos node_modules-kansio on jätetty purkamatta, aja projektikansiossa `npm ci`. Riippuvuuksien versiot on lukittu package-lock.json-tiedostoon. Sovelluksen versio on 2026.09.08.2. `npm start` käyttää palvelimen ympäristömuuttujia; `npm run dev` lukee myös `.env`-tiedoston. Portti on oletuksena 4173 ja sen voi vaihtaa PORT-ympäristömuuttujalla.
+Paketointikorjaus 2026.09.05.2 sisältää **geotiff-kirjaston ja kaikki sen ajonaikaiset riippuvuudet node_modules-kansiossa**. Pura myös tämä kansio palvelimen viereen. Käynnistys ei vaadi erillistä npm-asennusta. Jos node_modules-kansio on jätetty purkamatta, aja projektikansiossa `npm ci`. Riippuvuuksien versiot on lukittu package-lock.json-tiedostoon. Sovelluksen versio on 2026.09.15.1. `npm start` käyttää palvelimen ympäristömuuttujia; `npm run dev` lukee myös `.env`-tiedoston. Portti on oletuksena 4173 ja sen voi vaihtaa PORT-ympäristömuuttujalla.
 
 Versionumero näkyy kohdelistan päivitysajassa ja päättelyn perusteissa. CSS- ja moduulitiedostoilla on uusi versionumero sekä uudelleenvalidointia vaativat välimuistiotsakkeet. Vanha ladattu paketti ei siis korvaa uutta samoilla resurssiosoitteilla.
 
@@ -27,7 +39,7 @@ Versionumero näkyy kohdelistan päivitysajassa ja päättelyn perusteissa. CSS-
 - **Karttapopup:** D0-huipun lisäksi koko 14 päivän suurin ylilentokohtainen FRP ja sen päivämäärä, esimerkiksi `14 vrk FRP-huippu 120 MW (29.8.)`. Tasatilanteessa näytetään viimeisin päivä.
 - **Tiedot ja FRP:** suuri kohdeikkuna näyttää 14 päivän ylilentohuiput, kaikki ylilennot taulukossa, saman satelliitin päivä/yö-vertailumediaanit, FRP-suhteet, intensiteetti- ja laajuuspisteet sekä ulkopuoliset pikselit. Päivämäärät ovat muodossa `29.8.`. Pylvään valinta vaihtaa analyysipäivän.
 - **Päättelyn perusteet:** suuri erillinen ikkuna, jossa luokittelun säännöt, tarkat rajat, näytön pisteytys ja rajoitukset. Oikean reunan Suuren palon sääntö -kohtaa ei ole.
-- **Kartta:** tumma, vaalea ja harmaasävyinen OpenStreetMap-pohja. Koordinaattihaku hyväksyy esimerkiksi `60.3, 25.5`. Karttaa voi siirtää myös nuolinäppäimillä. Kartan siirto, koordinaattihaku ja zoomaus odottavat 3 sekuntia viimeisestä muutoksesta ennen havaintohakua. Päivänvaihto ja Päivitä toimivat heti.
+- **Kartta:** tumma, vaalea ja harmaasävyinen OpenStreetMap-pohja. Koordinaattihaku hyväksyy esimerkiksi `60.3, 25.5`. Karttaa voi siirtää myös nuolinäppäimillä. Kartan siirto, koordinaattihaku ja zoomaus odottavat 4 sekuntia viimeisestä muutoksesta ennen havaintohakua. Päivänvaihto ja Päivitä toimivat heti.
 - **CSV:** vie valitun näkymän kaikki kohteet, lämpötilanteet, ympäristöt, FRP-huiput ja havaintopäivät. Lista näyttää enintään 150 kohdetta; kartta ja vienti sisältävät kaikki suodattimeen sopivat kohteet.
 
 ## Mitä luotettavuuteen korjattiin
@@ -91,7 +103,7 @@ Regressiot kattavat pienet tapahtumat, 9/13-toistuvuuden, puuttuvat vertailuryhm
 
 © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium. Kartta © OpenStreetMap contributors. GeoTIFF.js ja kehitystestien LinkeDOM ovat niiden omien lisenssien alaisia riippuvuuksia.
 
-## Päivitys 2026.09.08.2
+## Päivitys 2026.09.15.1
 
 - Rakennettu havaintopikselin sisäosa erotetaan rakennuksista paikannuspuskurissa. Sisäosassa ja puskurissa on kummassakin 25 maanpeitenäytettä lämpösolua kohden.
 - Rakennettua luokkaa ei enää nimetä automaattisesti rakennuspaloksi. Kasvillisuusympäristö eritellään vallitsevan maanpeitteen mukaan.
@@ -105,3 +117,17 @@ Regressiot kattavat pienet tapahtumat, 9/13-toistuvuuden, puuttuvat vertailuryhm
 Vaiheittainen julkaisuohje on tiedostossa [GITHUB-OHJE.md](GITHUB-OHJE.md). Ohje käyttää englanninkielistä repon nimeä `thermal-anomalies`. Paketin .gitignore jättää node_modules-kansion, .env-tiedostot ja pakettiarkistot pois versionhallinnasta.
 
 Sama sivuston osoite ja selainprofiili käyttävät samaa avaintallennusta. Avainta ei synkronoida GitHub-tiliin eikä muihin selaimiin. Selaintietojen tyhjennys poistaa sen; yksityinen selaus voi rajoittaa muistamista. Tallennuksen estyessä sovellus kertoo siitä ja avain toimii sivun avaamisen ajan. Selain lähettää käyttäjän avaimen oman Node-palvelimen X-FIRMS-MAP-Key-otsakkeessa, ja palvelin välittää sen NASA:lle. Älä tallenna tätä otsaketta tai NASA:n avaimellisia URL-osoitteita julkaisuympäristön pyyntölokeihin.
+
+## Kartan automaattihaun korjaus 2026.09.08.3
+
+Ajastimen selainkohtainen kutsukonteksti on korjattu. Kartan siirto ja zoomaus hakevat havainnot automaattisesti neljän sekunnin rauhoittumisen jälkeen. Uusi muutos aloittaa odotuksen alusta, vetäminen keskeyttää odottavan ajastimen ja Päivitä tekee heti yhden haun. Ajastuksen ja käyttöliittymän testeissä tarkistetaan myös uuden kartta-alueen välittyminen hakupyyntöön.
+
+## OpenStreetMap-korjaus 2026.09.15.1
+
+- Palvelimen Referrer-Policy on strict-origin-when-cross-origin; karttakuvissa on lisäksi sama asetus. Aiempi no-referrer esti OpenStreetMapin edellyttämän Referer-tiedon lähettämisen.
+- Kartan liikuttaminen käyttää uudelleen näkyvät karttakuvat ja pyytää vain näkymään tulevat tiilet. Selain hoitaa välimuistin OSM:n otsakkeiden mukaan. Kartan ulkopuolisia tiiliä ei esiladata.
+- NASA-havaintohaun neljän sekunnin viive ja käyttäjän oma API-avain säilyvät ennallaan.
+
+Päivitä projektin tiedostot, käynnistä Node-palvelin uudelleen ja lataa sivu normaalisti uudelleen. Verkkopalveluun korjaus on myös julkaistava. Versio näkyy käyttöliittymässä muodossa 2026.09.15.1. Jos 403 jatkuu, tarkista selaimen Network-näkymästä, lähettääkö karttakuvan pyyntö todellisen sivusto-osoitteen Referer-tiedon. Laajennus tai välityspalvelin voi poistaa sen. Mahdollinen jo voimassa oleva palveluntarjoajan esto ei välttämättä poistu heti koodikorjauksella. Älä lisää pyyntöihin satunnaisia parametreja tai muuta osoitteita eston kiertämiseksi.
+
+Ohje perustuu [OpenStreetMapin tiilipalvelun käyttöehtoihin](https://operations.osmfoundation.org/policies/tiles/).

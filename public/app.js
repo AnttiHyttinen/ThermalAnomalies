@@ -1,9 +1,12 @@
-import { migrateMapKey, saveMapKey, removeMapKey, MAP_KEY_STORAGE, createDebouncedAction } from "./preferences.js?v=20260908.2";
-import { dailyCounts, findLargeFireEvents } from "./anomaly.js?v=20260908.2";
-import { formatDate, shortWeekday, periodFrpPeak } from "./format.js?v=20260908.2";
+﻿import { buildDetailAnalysis, detailBounds, exportEvolutionCsv } from "./evolution.js?v=20261013.1";
+import { renderEvolution, renderSpatial } from "./detail-view.js?v=20261013.1";
+import { createTileRenderer } from "./tiles.js?v=20261013.1";
+import { migrateMapKey, readMapKey, saveMapKey, removeMapKey, canSendMapKey, MAP_KEY_STORAGE, MAP_FETCH_DELAY_MS, createDebouncedAction } from "./preferences.js?v=20261013.1";
+import { dailyCounts, findLargeFireEvents } from "./anomaly.js?v=20261013.1";
+import { formatDate, shortWeekday, periodFrpPeak } from "./format.js?v=20261013.1";
 
-import { environmentalContext, observationEvidence, priorityFor, visibleEvents, shiftDay, selectionDate, exportEventsCsv, LANDCOVER_CLASSES } from "./assessment.js?v=20260908.2";
-import { REASONING_HTML } from "./reasoning.js?v=20260908.2";
+import { environmentalContext, observationEvidence, priorityFor, visibleEvents, shiftDay, selectionDate, exportEventsCsv, LANDCOVER_CLASSES } from "./assessment.js?v=20261013.1";
+import { REASONING_HTML } from "./reasoning.js?v=20261013.1";
 document.querySelector("#reasoning-content").innerHTML = REASONING_HTML;
 
 const TILE_SIZE = 256;
@@ -68,6 +71,7 @@ const elements = {
 };
 
 const context = elements.canvas.getContext("2d");
+const updateTiles = createTileRenderer(elements.tiles);
 const state = {
   center: { longitude: INITIAL_VIEW.longitude, latitude: INITIAL_VIEW.latitude },
   zoom: INITIAL_VIEW.zoom,
@@ -90,6 +94,8 @@ const state = {
   contextController: null,
   contextBusy: false,
   currentEventId: null,
+  detail: null,
+  detailController: null,
   tooltipEventId: null,
   counts: [],
   filter: "attention",
@@ -108,7 +114,7 @@ const state = {
   reasoningReturnFocus: null,
 };
 
-const mapFetch = createDebouncedAction(() => fetchData(), 3000);
+const mapFetch = createDebouncedAction(() => fetchData());
 
 const timeFormatter = new Intl.DateTimeFormat("fi-FI", {
   hour: "2-digit",
@@ -137,7 +143,7 @@ for (const element of [elements.eventFilter, elements.eventSort, elements.repeat
 });
 elements.moreLandcover.addEventListener("click", () => enrichContexts(state.requestVersion));
 elements.eventDialogClose.addEventListener("click", () => elements.eventDialog.close());
-elements.eventDialog.addEventListener("close", () => { state.currentEventId = null; });
+elements.eventDialog.addEventListener("close", () => { state.currentEventId = null; state.detailController?.abort(); state.detail = null; });
 elements.exportCsv.addEventListener("click", () => {
   if (!state.data) return;
   const blob = new Blob([exportEventsCsv(currentEvents(), state.data.range.end)], { type: "text/csv;charset=utf-8" });
@@ -163,13 +169,14 @@ new ResizeObserver(([entry]) => {
 
 elements.keyForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (!canSendMapKey()) return showToast("Avaa sovellus HTTPS-osoitteella ennen avaimen syöttämistä. Paikallinen localhost on sallittu.");
   const value = elements.keyInput.value.trim();
   if (!/^[A-Za-z0-9_-]{16,128}$/.test(value)) {
     showToast("MAP_KEY ei ole oikeassa muodossa.");
     return;
   }
   state.mapKey = value;
-  const remembered = saveMapKey(value);
+  const remembered = saveMapKey(value, document.querySelector("#remember-key").checked);
   elements.keyInput.value = "";
   elements.keyPanel.hidden = true;
   fetchData({ announce: true });
@@ -178,11 +185,14 @@ elements.keyForm.addEventListener("submit", (event) => {
 
 elements.keySettings.addEventListener("click", () => {
   elements.keyPanel.hidden = !elements.keyPanel.hidden;
+  document.querySelector("#key-state").textContent = state.mapKey ? (readMapKey() ? "Avain on tallennettu tähän selaimeen. Uusi avain korvaa sen." : "Avain on käytössä vain tässä välilehdessä.") : state.data ? "Omaa avainta ei ole tallennettu. Haut käyttävät palvelimen yhteistä avainta." : "Avainta ei ole tallennettu.";
+  document.querySelector("#remember-key").checked = Boolean(readMapKey());
   elements.forgetKey.disabled = !state.mapKey;
   if (!elements.keyPanel.hidden) elements.keyInput.focus();
 });
 elements.forgetKey.addEventListener("click", () => {
   const removed = removeMapKey(); state.mapKey = ""; elements.keyInput.value = "";
+  document.querySelector("#key-state").textContent = removed ? "Avain poistettu." : "Tyhjennä sivuston tiedot selaimesta.";
   fetchData(); showToast(removed ? "API-avain poistettu tämän sivuston selainmuistista." : "Selain esti avaimen poistamisen. Tyhjennä sivuston tallennustiedot selaimen asetuksista.");
 });
 window.addEventListener("storage", (event) => {
@@ -321,7 +331,7 @@ function changeZoom(amount) {
 
 function scheduleFetch() {
   mapFetch.schedule();
-  if (state.mapKey) setStatus("Haku 3 s kuluttua", "idle");
+  if (state.mapKey) setStatus(`Haku ${MAP_FETCH_DELAY_MS / 1000} s kuluttua`, "idle");
 }
 
 function scheduleUtcRollover() {
@@ -360,7 +370,7 @@ function selectDay(date, live = false) {
 async function fetchData({ announce = false, force = false } = {}) {
   if (!state.width || !state.height) return;
   mapFetch.cancel();
-  state.abortController?.abort(); state.contextController?.abort();
+  state.abortController?.abort(); state.contextController?.abort(); state.detailController?.abort();
   const version = ++state.requestVersion;
   const abortController = new AbortController();
   state.abortController = abortController;
@@ -375,14 +385,13 @@ async function fetchData({ announce = false, force = false } = {}) {
   elements.rangeTitle.textContent = `${formatDate(selectedDate)}${selectedDate.slice(0, 4)} · UTC`;
   elements.coverageNote.textContent = "Haetaan aineistoa. Edellisen haun tuloksia ei näytetä uuden päivän tuloksina.";
   drawHeatLayer(); setLoading(true); setStatus("Haetaan", "idle");
-  if (!state.mapKey) {
-    setLoading(false); setStatus("Oma avain tarvitaan", "idle");
-    elements.keyPanel.hidden = false; elements.forgetKey.disabled = true;
-    elements.coverageNote.textContent = "Syötä oma NASA FIRMS MAP_KEY. Yhteistä palvelinavainta ei käytetä.";
-    elements.fireList.innerHTML = '<p class="list-placeholder">Haku alkaa, kun olet syöttänyt oman API-avaimesi.</p>';
+  // Without an own key the server may still use an optional shared key; otherwise it answers MAP_KEY_REQUIRED.
+  if (state.mapKey && !canSendMapKey()) {
+    setLoading(false); setStatus("HTTPS tarvitaan", "error"); elements.keyPanel.hidden = false;
+    elements.coverageNote.textContent = "Avainta ei lähetetty. Avaa sovellus HTTPS-yhteydellä; localhost on sallittu.";
     return;
   }
-  elements.forgetKey.disabled = false;
+  elements.forgetKey.disabled = !state.mapKey;
   try {
     const params = new URLSearchParams(Object.fromEntries(Object.entries(getViewportArea()).map(([key, value]) => [key, value.toFixed(4)])));
     params.set("date", selectedDate);
@@ -402,9 +411,14 @@ async function fetchData({ announce = false, force = false } = {}) {
     void enrichContexts(version);
   } catch (error) {
     if (version !== state.requestVersion || abortController.signal.aborted) return;
-    if (["MAP_KEY_REQUIRED", "INVALID_MAP_KEY"].includes(error.code)) {
-      if (error.code === "INVALID_MAP_KEY") { state.mapKey = ""; removeMapKey(); }
-      elements.keyPanel.hidden = false; setStatus("Avain puuttuu", "error");
+    if (error.code === "MAP_KEY_REQUIRED") {
+      promptForMapKey();
+      return;
+    }
+    if (error.code === "INVALID_MAP_KEY") {
+      if (state.mapKey) { state.mapKey = ""; removeMapKey(); }
+      elements.keyPanel.hidden = false; elements.forgetKey.disabled = true; elements.keyInput.focus();
+      setStatus("Avain puuttuu", "error");
     } else setStatus("Hakuvirhe", "error");
     const message = error.name === "TimeoutError" ? "NASA-haku aikakatkaistiin. Yritä pienempää aluetta tai päivitä uudelleen." : error.message;
     elements.coverageNote.textContent = message; elements.coverageNote.dataset.warning = "true";
@@ -413,6 +427,15 @@ async function fetchData({ announce = false, force = false } = {}) {
   } finally {
     if (version === state.requestVersion) { state.abortController = null; setLoading(false); }
   }
+}
+
+function promptForMapKey() {
+  setStatus("Oma avain tarvitaan", "idle");
+  elements.keyPanel.hidden = false; elements.forgetKey.disabled = true;
+  document.querySelector("#key-state").textContent = "Palvelimella ei ole yhteistä avainta. Syötä oma NASA FIRMS MAP_KEY.";
+  elements.coverageNote.textContent = "Syötä oma NASA FIRMS MAP_KEY.";
+  elements.fireList.innerHTML = '<p class="list-placeholder">Haku alkaa, kun olet syöttänyt oman API-avaimesi.</p>';
+  elements.keyInput.focus();
 }
 
 function currentEvents() { return visibleEvents(state.analysis.events, state); }
@@ -478,7 +501,7 @@ function renderSummary() {
   const warning = data.coverageComplete === false;
   elements.coverageNote.dataset.warning = String(warning);
   elements.coverageNote.textContent = `${currentDay ? "Kuluva UTC-päivä on kesken. " : "Historiallinen UTC-päivä. "}Vertailu ${formatDate(data.analysisRange.start)}–${formatDate(shiftDay(selectedDate,-1))}. ${warning ? "Osa aineistosta puuttuu; normaalitasoa ei vahvisteta." : "Datapyynnöt onnistuivat. Pilvien ja ylitysten kattavuutta ei tunneta."}${data.warnings?.length ? "\n" + data.warnings.join("\n") : ""}`;
-  elements.lastUpdated.textContent = `Haettu ${formatDate(data.generatedAt.slice(0,10))} ${timeFormatter.format(new Date(data.generatedAt))} UTC · versio 2026.09.08.2`;
+  elements.lastUpdated.textContent = `Haettu ${formatDate(data.generatedAt.slice(0,10))} ${timeFormatter.format(new Date(data.generatedAt))} UTC · versio 2026.10.13.1`;
   const maximum = Math.max(...counts.map((e) => e.count), 1);
   elements.dailyBars.replaceChildren(...counts.map((entry) => {
     const button = document.createElement("button"); button.type = "button"; button.className = "day-bar"; button.dataset.selected = String(entry.date === selectedDate);
@@ -513,10 +536,14 @@ function eventTitle(event) { return priorityFor(event).label; }
 function eventStatus(event) { return priorityFor(event).reason; }
 
 function openEvent(event) {
+  mapFetch.cancel();
+  state.detailController?.abort();
+  state.detail = { status: "loading", radiusKm: Math.min(20, Math.max(2, Math.ceil((event.extentKm || 0) + 1))), days: 28 };
   state.currentEventId = event.id;
   renderOpenEvent();
   if (!elements.eventDialog.open) elements.eventDialog.showModal();
   elements.eventDialogClose.focus();
+  void fetchEventDetail(event);
 }
 
 function renderOpenEvent() {
@@ -534,6 +561,7 @@ function renderOpenEvent() {
   }).join("");
   const detailedComparisons = (event.comparisons || []).filter((entry)=>entry.pass.date===selectedDate).map((entry)=>`<tr><td>${escapeHtml(entry.pass.satellite)} ${escapeHtml(entry.pass.time)} / ${escapeHtml(entry.pass.daynight)}</td><td>${entry.fullyComparable ? "Kyllä" : "Ei"}</td><td>${formatScore(entry.intensityScore)}</td><td>${formatScore(entry.extentScore)}</td><td>${formatScore(entry.metrics.pixelCount.median)}</td><td>${formatScore(entry.metrics.radius95.median)}</td><td>${entry.isAnomalous ? "Poikkeama" : entry.fullyComparable ? "Rajoissa" : "Riittämätön vertailu"}</td></tr>`).join("");
   elements.eventDialogContent.innerHTML = `
+    <section id="deep-analysis" class="deep-analysis"></section>
     <p class="details-meta">${event.latitude.toFixed(5)}, ${event.longitude.toFixed(5)} · D0 ${formatDate(selectedDate)}${selectedDate.slice(0,4)} · UTC</p>
     <section class="detail-box evidence-summary"><h3>Mitä kohteesta voidaan päätellä?</h3><p><strong>${escapeHtml(priorityFor(event).label)}</strong></p><p>${escapeHtml(priorityFor(event).reason)}</p><p>${evidence.date ? formatDate(evidence.date) : "—"}: ${evidence.passCount} ajoitettua ylilentoa, ${evidence.satellites} satelliittia. ${evidence.repeated ? "Useat havainnot tukevat lämpötapahtuman olemassaoloa; ne eivät varmista palavaa materiaalia." : "Yksittäistä tai puutteellisesti ajoitettua havaintoa ei pidetä vahvana tyyppinäyttönä."}</p><p>Viimeisin ajoitettu havainto: ${evidence.latest ? formatDate(evidence.date) + " " + evidence.latest.slice(11) + " UTC" : "—"}. FRP suhteessa oman vertailuryhmän mediaaniin: ${Number.isFinite(evidence.ratio) ? formatScore(evidence.ratio) + "× (päivän suurin suhde)" : "ei riittävää vertailua"}.</p><p class="meta">Rakennuspaloa, jalostamoa tai räjähdevarastoa ei nimetä ilman niitä erottavaa havaintonäyttöä.</p></section>
     <div class="detail-grid"><section class="detail-box"><h3>Lämpötilanne</h3><p>${escapeHtml(priorityFor(event).reason)}</p><p>Havaintopäivät: ${event.activeDates.map(formatDate).join(", ") || "—"}.</p><p>${event.kind === "fire" ? `${event.currentPassCount} ylilentoa D0:lla. Pieni pistemäärä ei sulje pois paloa.` : `Pysyvyys ${event.persistenceActiveDayCount}/13 vertailupäivää. ${event.comparableCurrentPasses}/${event.currentPassCount} täysin vertailukelpoista ylilentoa D0:lla.`}</p><p>Näyttö: ${escapeHtml(event.reliability.label)}. ${escapeHtml((event.reliability.reasons||[]).join("; "))}</p>${event.changePoint ? `<p>Muutoskohta ${formatDate(event.changePoint.date)}: ${escapeHtml(event.changePoint.group)} · FRP ${formatScore(event.changePoint.frpRatio)}×. Vertailu päättyy ${formatDate(event.baselinePeriod.end)}. Historiallinen muutos ei yksin vahvista nykyistä paloa.</p>` : ""}</section><section class="detail-box"><h3>${escapeHtml(env.label)}</h3><p>${escapeHtml(envDetails)}</p><p>ESA WorldCover 2021: näytteet kuvaavat ympäristöä, eivät palavaa rakennusta tai materiaalia. Vuoden 2021 jälkeen muuttunut maanpeite voi johtaa virheeseen.</p><p>${escapeHtml(event.behavior?.label || "")}. ${escapeHtml(event.behavior?.candidate || "")}</p></section></div>
@@ -543,8 +571,55 @@ function renderOpenEvent() {
     <details><summary>Geometrian perustelut ja rajat</summary><ul>${[...(event.behavior?.supports||[]),...(event.behavior?.cautions||[])].map((text)=>`<li>${escapeHtml(text)}</li>`).join("")}</ul></details>
     ${env.counts ? `<h3>Maanpeitenäytteiden jakauma</h3><div class="table-scroll"><table><thead><tr><th>Luokka</th><th>Näytteitä</th></tr></thead><tbody>${Object.entries(env.counts).map(([code,n])=>`<tr><td>${escapeHtml(LANDCOVER_CLASSES[code] || code)}</td><td>${n}</td></tr>`).join("")}</tbody></table></div>` : ""}
     <p class="details-meta">© ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium. CC BY 4.0. Tapahtuman käyttöpaikkaa ei haeta kohdeluettelosta.</p>`;
+  renderDetailSection(event);
   for (const button of elements.eventDialogContent.querySelectorAll("[data-select-date]")) button.addEventListener("click",()=>selectDay(button.dataset.selectDate));
   for (const bar of elements.eventDialogContent.querySelectorAll("[data-frp-height]")) bar.style.height = `${bar.dataset.frpHeight}%`;
+}
+
+
+async function fetchEventDetail(event, force = false) {
+  state.detailController?.abort();
+  const controller = new AbortController();
+  state.detailController = controller;
+  const detail = state.detail;
+  if (!detail || !state.data) return;
+  detail.status = "loading"; detail.analysis = null;
+  renderDetailSection(event);
+  const params = new URLSearchParams({...detailBounds(event, detail.radiusKm), date:state.data.range.end, days:detail.days});
+  if (force) params.set("refresh", "1");
+  try {
+    const response = await fetch(`/api/event-data?${params}`, {headers:state.mapKey ? {"X-FIRMS-MAP-Key":state.mapKey} : {}, signal:AbortSignal.any([controller.signal,AbortSignal.timeout(150000)])});
+    const payload = await response.json();
+    if (controller.signal.aborted || state.detail !== detail || state.currentEventId !== event.id) return;
+    if (!response.ok) throw new Error(payload.error?.message || "Kohdehaku epäonnistui.");
+    detail.analysis = buildDetailAnalysis(payload,event,detail.radiusKm);
+    detail.status = "ready";
+  } catch (error) {
+    if (controller.signal.aborted || state.detail !== detail) return;
+    detail.status = "error"; detail.error = error.name === "TimeoutError" ? "Kohdehaku aikakatkaistiin. Yritä 14 päivän jaksoa tai päivitä uudelleen." : error.message;
+  }
+  if (state.detail === detail && state.currentEventId === event.id) renderDetailSection(event);
+}
+
+function renderDetailSection(event) {
+  const root = document.querySelector("#deep-analysis"), detail = state.detail;
+  if (!root || !detail) return;
+  root.innerHTML = `<div class="detail-controls"><label>Jakso <select id="detail-days"><option value="14"${detail.days===14 ? " selected" : ""}>14 vrk</option><option value="28"${detail.days===28 ? " selected" : ""}>28 vrk</option></select></label><label>Hakualueen säde (km) <input id="detail-radius" type="number" min="1" max="20" step="0.5" value="${detail.radiusKm}"></label><button id="detail-refresh" type="button">Hae kohde uudelleen</button><span role="status">${detail.status === "loading" ? "Haetaan kohteen tarkkaa VIIRS- ja MODIS-aineistoa…" : detail.status === "error" ? escapeHtml(detail.error) : "Kohdeaineisto haettu"}</span></div>${detail.analysis ? renderEvolution(detail.analysis) : '<p>Alla karttahaun aiemmat 14 vuorokauden tiedot. Tarkempi analyysi täydentyy oman haun valmistuttua.</p>'}`;
+  root.querySelector("#detail-refresh").addEventListener("click", () => {
+    const radius = Number(root.querySelector("#detail-radius").value);
+    if (!Number.isFinite(radius) || radius < 1 || radius > 20) return showToast("Valitse säde väliltä 1–20 km.");
+    detail.radiusKm = radius; detail.days = Number(root.querySelector("#detail-days").value);
+    void fetchEventDetail(event,true);
+  });
+  if (!detail.analysis) return;
+  const a = detail.analysis, select = root.querySelector("#detail-pass");
+  const spatial = () => {root.querySelector("#detail-spatial").innerHTML=renderSpatial(a,event,Number(select.value));};
+  select.addEventListener("change",spatial); spatial();
+  root.querySelector("#detail-export").addEventListener("click", () => {
+    const url=URL.createObjectURL(new Blob([exportEvolutionCsv(a)],{type:"text/csv;charset=utf-8"}));
+    const link=document.createElement("a"); link.href=url; link.download=`kohde-${event.latitude.toFixed(4)}-${event.longitude.toFixed(4)}-${a.range.end}.csv`; link.click();
+    setTimeout(() => URL.revokeObjectURL(url),1000);
+  });
 }
 
 function renderFrpProfile(event, today) {
@@ -567,30 +642,7 @@ function renderMap() {
 }
 
 function renderTiles() {
-  const center = projectWorld(state.center, state.zoom);
-  const tileCount = 2 ** state.zoom;
-  const left = center.x - state.width / 2;
-  const top = center.y - state.height / 2;
-  const minTileX = Math.floor(left / TILE_SIZE) - 1;
-  const maxTileX = Math.floor((left + state.width) / TILE_SIZE) + 1;
-  const minTileY = Math.max(0, Math.floor(top / TILE_SIZE) - 1);
-  const maxTileY = Math.min(tileCount - 1, Math.floor((top + state.height) / TILE_SIZE) + 1);
-  const fragment = document.createDocumentFragment();
-
-  for (let tileY = minTileY; tileY <= maxTileY; tileY += 1) {
-    for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
-      const wrappedX = ((tileX % tileCount) + tileCount) % tileCount;
-      const image = document.createElement("img");
-      image.alt = "";
-      image.draggable = false;
-      image.decoding = "async";
-      image.src = `https://tile.openstreetmap.org/${state.zoom}/${wrappedX}/${tileY}.png`;
-      image.style.left = `${Math.round(tileX * TILE_SIZE - left)}px`;
-      image.style.top = `${Math.round(tileY * TILE_SIZE - top)}px`;
-      fragment.append(image);
-    }
-  }
-  elements.tiles.replaceChildren(fragment);
+  updateTiles({ center: projectWorld(state.center, state.zoom), zoom: state.zoom, width: state.width, height: state.height });
 }
 
 function drawHeatLayer() {
@@ -669,7 +721,7 @@ function showNearestEvent(event) {
       distance = candidateDistance;
     }
   }
-  if (closest) showTooltipFor(closest);
+  if (closest) openEvent(closest);
 }
 
 function showTooltipFor(event) {

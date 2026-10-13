@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+﻿import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -11,6 +11,7 @@ import {
   buildFirmsUrl,
   deduplicateDetections,
   fourteenDaySegments,
+  observationSegments,
   isLikelyMapKey,
   normalizeDetection,
   parseCsv,
@@ -39,7 +40,7 @@ export const server = createServer(async (request, response) => {
   const url = new URL(request.url || "/", "http://localhost");
 
   try {
-    if (url.pathname === "/api/hotspots") {
+    if (url.pathname === "/api/hotspots" || url.pathname === "/api/event-data") {
       await handleHotspots(request, response, url);
       return;
     }
@@ -107,8 +108,16 @@ async function handleHotspots(request, response, url) {
 
   const area = validateArea(url.searchParams);
   const today = validateSelectedDate(url.searchParams.get("date"));
-  // Only this request's user-supplied key is allowed. Never fall back to a shared server key.
-  const mapKey = String(request.headers["x-firms-map-key"] || "").trim();
+  const detail = url.pathname === "/api/event-data";
+  const totalDays = detail ? Number(url.searchParams.get("days") || 28) : 14;
+  if (detail && (![14, 28].includes(totalDays) || (area.east - area.west) * Math.cos((area.north + area.south) / 2 * Math.PI / 180) > 0.5 || area.north - area.south > 0.5)) {
+    return sendJson(response, 400, { error: { code: "INVALID_DETAIL_AREA", message: "Kohdehaku sallii 14 tai 28 päivää ja enintään noin 55 km leveän alueen." } });
+  }
+  // The user's own key wins. An optional shared production key (NASA_FIRMS_MAP_KEY) is only a fallback;
+  // without either, the client is told to ask the user for their own key.
+  const userKey = String(request.headers["x-firms-map-key"] || "").trim();
+  const sharedKey = String(process.env.NASA_FIRMS_MAP_KEY || "").trim();
+  const mapKey = userKey || (isLikelyMapKey(sharedKey) ? sharedKey : "");
 
   if (!mapKey) {
     sendJson(response, 401, {
@@ -128,7 +137,7 @@ async function handleHotspots(request, response, url) {
   }
 
   const keyFingerprint = createHash("sha256").update(mapKey).digest("hex");
-  const cacheKey = `${today}:${keyFingerprint}:${areaKey(area)}`;
+  const cacheKey = `${detail ? "detail" : "map"}:${totalDays}:${today}:${keyFingerprint}:${areaKey(area)}`;
   const cached = responseCache.get(cacheKey);
   const bypassCache = url.searchParams.has("refresh");
   if (!bypassCache && cached && Date.now() - cached.createdAt < CACHE_TTL_MS) {
@@ -140,7 +149,7 @@ async function handleHotspots(request, response, url) {
 
   const controller = new AbortController();
   response.once("close", () => controller.abort());
-  const result = await fetchFourteenDays({ mapKey, area, today, signal: controller.signal });
+  const result = await fetchFourteenDays({ mapKey, area, today, totalDays, sources: detail ? [...FIRMS_SOURCES, "MODIS_NRT"] : FIRMS_SOURCES, signal: controller.signal });
   if (response.destroyed) return;
   responseCache.set(cacheKey, { createdAt: Date.now(), payload: result });
   pruneCache();
@@ -149,9 +158,9 @@ async function handleHotspots(request, response, url) {
   sendJson(response, 200, result);
 }
 
-export async function fetchFourteenDays({ mapKey, area, today, signal }) {
-  const segments = fourteenDaySegments(today);
-  const sourceResults = await Promise.all(FIRMS_SOURCES.map(async (source) => {
+export async function fetchFourteenDays({ mapKey, area, today, signal, totalDays = 14, sources = FIRMS_SOURCES }) {
+  const segments = totalDays === 14 ? fourteenDaySegments(today) : observationSegments(today, totalDays);
+  const sourceResults = await Promise.all(sources.map(async (source) => {
     const detections = [];
     const successfulSegments = [];
     const failedSegments = [];
@@ -197,7 +206,7 @@ export async function fetchFourteenDays({ mapKey, area, today, signal }) {
   return {
     generatedAt: new Date().toISOString(),
     range: { start: displayStart, end: today, days: 7, timezone: "UTC" },
-    analysisRange: { start: analysisStart, end: today, days: 14, timezone: "UTC" },
+    analysisRange: { start: analysisStart, end: today, days: totalDays, timezone: "UTC" },
     area,
     detections,
     sources: successful.map((result) => result.source),
@@ -332,7 +341,7 @@ function setSecurityHeaders(response) {
     "base-uri 'self'",
     "form-action 'self'",
   ].join("; "));
-  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader("X-Frame-Options", "DENY");
 }
