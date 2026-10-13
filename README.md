@@ -134,4 +134,4 @@ Ohje perustuu [OpenStreetMapin tiilipalvelun käyttöehtoihin](https://operation
 
 ## Vercel
 
-Tuotanto: https://thermal-anomalies.vercel.app. `public/` julkaistaan staattisena ja `api/*.js` ajetaan Vercel-funktioina, jotka käyttävät `server.mjs`:n käsittelijää. Julkaisu: `npx vercel deploy --prod`. Valinnainen `NASA_FIRMS_MAP_KEY` asetetaan Vercelin projektin ympäristömuuttujiin.
+Tuotanto: https://thermal-anomalies.vercel.app. `public/` julkaistaan staattisena ja `api/*.js` ajetaan Vercel-funktioina, jotka käyttävät `server.mjs`:n käsittelijää. Julkaisu tehdään aina erikseen komennolla `npx vercel deploy --prod`; GitHubiin vienti ei käynnistä Vercel-julkaisua (`git.deploymentEnabled: false`). Valinnainen `NASA_FIRMS_MAP_KEY` asetetaan Vercelin projektin ympäristömuuttujiin.
